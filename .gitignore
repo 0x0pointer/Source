@@ -1,0 +1,16 @@
+.venv/
+**/.venv/
+__pycache__/
+models/
+# The index contains the full text of your notes. Kept out of git on purpose;
+# remove this line only if this repo stays private.
+index/
+.DS_Store
+source/.obsidian/workspace*.json
+
+# tooling / build artifacts
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.eggs/

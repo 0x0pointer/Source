@@ -1,0 +1,79 @@
+[
+ {
+  "query": "when does something earn a place in the main playbook instead of only living in the per-run log?",
+  "kind": "paraphrase",
+  "expected_path": "README.md",
+  "expected_heading": "The format decision (the reusable idea)",
+  "answer_snippet": "promote only **confirmed** techniques into METHODOLOGY/refs. A step earns its place in the methodology after it worked on a real task",
+  "ok": true,
+  "also_acceptable": [
+   "QUICKSTART.md :: 6. Record & promote"
+  ]
+ },
+ {
+  "query": "the output is clearly wrong but all I can see is the symptom — how far should I go before I start changing things?",
+  "kind": "paraphrase",
+  "expected_path": "METHODOLOGY.md",
+  "expected_heading": "Phase 2 — DIAGNOSE (find the cause, not just a symptom)",
+  "answer_snippet": "A symptom is not a cause. ... Keep going until you can name the mechanism.",
+  "ok": true,
+  "also_acceptable": [
+   "journal/example-entry.md :: Phase 2 — Diagnose"
+  ]
+ },
+ {
+  "query": "the bug only shows up some of the time — can I move on and start diagnosing it now?",
+  "kind": "scenario",
+  "expected_path": "QUICKSTART.md",
+  "expected_heading": "1. Reproduce (finish before changing anything)",
+  "answer_snippet": "Get a reliable one-command repro. A flaky repro isn't done.",
+  "ok": true,
+  "also_acceptable": [
+   "METHODOLOGY.md :: Phase 1 — REPRODUCE (do this fully before changing anything)",
+   "METHODOLOGY.md :: 1a. Capture the exact conditions"
+  ]
+ },
+ {
+  "query": "ERR_CONN_4021",
+  "kind": "exact_term",
+  "expected_path": "journal/example-entry.md",
+  "expected_heading": "Phase 1 — Reproduce",
+  "answer_snippet": "the token ERR_CONN_4021 in the debug log — the kind of exact string worth recording verbatim",
+  "ok": true,
+  "also_acceptable": []
+ },
+ {
+  "query": "two requests with different locales come back with the same cached response — where is the actual bug?",
+  "kind": "scenario",
+  "expected_path": "journal/example-entry.md",
+  "expected_heading": "Phase 2 — Diagnose",
+  "answer_snippet": "the cache key is built from the path only and omits the locale query parameter",
+  "ok": true,
+  "also_acceptable": [
+   "METHODOLOGY.md :: Phase 2 — DIAGNOSE (find the cause, not just a symptom)"
+  ]
+ },
+ {
+  "query": "how do I actually prove a fix worked instead of just assuming it did?",
+  "kind": "paraphrase",
+  "expected_path": "METHODOLOGY.md",
+  "expected_heading": "Phase 4 — VERIFY (prove it, don't assume it)",
+  "answer_snippet": "Re-run the Phase 1 repro. It must now pass. That is the primary evidence.",
+  "ok": true,
+  "also_acceptable": [
+   "QUICKSTART.md :: 5. Verify",
+   "journal/example-entry.md :: Phase 4 — Verify"
+  ]
+ },
+ {
+  "query": "what's the standard shape I should use when adding a new reference entry?",
+  "kind": "paraphrase",
+  "expected_path": "refs/templates.md",
+  "expected_heading": "Reference entry template (`refs/*.md`)",
+  "answer_snippet": "Trigger -> Chain (numbered, with exact commands) -> Notes/gotchas -> Status",
+  "ok": true,
+  "also_acceptable": [
+   "refs/example-reference.md :: Adding a new entry"
+  ]
+ }
+]
