@@ -960,7 +960,7 @@
     "kind": "running"
   },
   "status_updated_at": "2026-11-26T15:56:37.505205788Z",
-  "last_event_at": "2026-11-26T16:10:24.529882722Z",
+  "last_event_at": "2026-11-26T16:10:31.994737461Z",
   "pending_control": null,
   "checkpoints": [
     {
@@ -3830,9 +3830,9 @@
       }
     },
     {
-      "seq": 0,
+      "seq": 577,
       "checkpoint": {
-        "timestamp": "2026-11-26T16:10:27.496867988Z",
+        "timestamp": "2026-11-26T16:10:31.990346745Z",
         "current_node": "release",
         "completed_nodes": [
           "start",
@@ -3853,54 +3853,68 @@
         ],
         "node_retries": {},
         "context_values": {
-          "response.spec": "DECISION NEEDED: `/search` could be MCP text, structured JSON, or both; choose structured JSON plus a `display` string from the same formatter as MCP, preserving compact rendering while making HTTP parseable.\n\n1. Intent\nAdd a stdlib-only localhost HTTP service for one Source `{vault, db}` instance. It must search/list an already built index, ingest mechanical-memory notes as Markdown, refresh the existing incremental SQLite index, and reload it. Add `INSTANCE` identity, default `source`, for service self-reporting without breaking existing CLI/MCP defaults.\n\n2. Acceptance criteria\n1. `INSTANCE` unset keeps existing `source` behavior; `INSTANCE=eng-a` makes `GET /health` return `instance: \"eng-a\"`.\n2. `serve_http.py --vault V --db D --port P` and `run_instance.sh NAME --vault V --db D --port P` serve only on `127.0.0.1:P` and use that vault/db.\n3. `GET /search?q=...&k=&mode=&path=&tags=` returns `200 application/json` with `results` entries containing rank/path/heading/score/text/tags/display and top-level `display`; display text matches MCP `path › heading` snippets, and no hits returns `results: []`, `display: \"no matches\"`.\n4. `GET /list` returns indexed notes plus metadata; `GET /health` returns readiness, instance, vault, db, and metadata when present.\n5. `POST /ingest` `{notes:[{id,title,tags,text}]}` writes valid notes to `vault/<id>.md`, creates id subdirectories, calls incremental `source_rag.build(...)`, reloads the index, and makes notes searchable/listed.\n6. Reposting the same `id` overwrites one file/index entry; two services with different vault/db/ports remain isolated.\n7. Existing `build_index.py`, `query.py`, and `mcp_server.py` behavior remains, including incremental reuse, path/tag filtering, and MCP output text.\n8. README documents multi-instance agent-smith usage and endpoint shapes; no new runtime dependency is added.\n\n3. Boundaries\nAlways: use stdlib `http.server`/`json`; use `R.VAULT_ENV`, `R.DB_ENV`, `R.DEFAULT_*`, `R.build`, `R.Index.search`, `R.Index.list_notes`; share search display formatting through `source_rag.py`.\nNever: add HTTP framework/deps, bind beyond localhost, change CI/deployment, remove/limit CLI or MCP, or write/index outside the selected vault.\n\n4. Code map\n- `source_rag.py`: add `INSTANCE_ENV`, `INSTANCE`, `format_search_hits(hits: list[dict]) -> str`; make `MCP_NAME` default to `source` and honor `INSTANCE`. Existing tests: `tests/test_chunking.py` build/search.\n- `mcp_server.py`: replace inline search formatting with `R.format_search_hits(...)` without changing output.\n- `serve_http.py` (new): `main(argv=None)`, localhost `HTTPServer`, JSON helpers, `/health`, `/list`, `/search`, `/ingest`, safe ingest validation/writes, rebuild/reload.\n- `run_instance.sh` (new): parse `<name> --vault <dir> --db <file> --port <n>`, export `INSTANCE`/`SOURCE_VAULT`/`SOURCE_DB`, run `.venv/bin/python serve_http.py ...`.\n- `README.md`: add multi-instance agent-smith section and endpoint examples.\n- `pyproject.toml`: include `serve_http` in `py-modules`; add `source-http` script only if consistent with existing scripts.\n- Tests: add `tests/test_http_service.py`; update `tests/test_chunking.py` for formatter/instance tests.\n\n5. Edge cases\n| Input/state | Expected behaviour |\n|---|---|\n| Missing/blank `/search` `q` | `400` JSON error. |\n| `k` absent, non-integer, outside range | default 3; non-integer `400`; integer clamped to 1..20. |\n| Invalid `mode` | `400`; only `hybrid`, `vector`, `keyword`. |\n| No ready index | health `200` with not-ready; search/list `503`; ingest may create the first index. |\n| Malformed JSON or missing `notes` list | `400`; no writes/rebuild. |\n| Oversized body | `413` before writes. |\n| Empty batch, too many notes, or duplicate ids | `400`; no writes. |\n| Absolute id, `..`, empty segments, backslash, NUL, bad chars | `400`; no write outside vault. |\n| Concurrent requests | Single-threaded serialization; no half-swapped db observed. |\n| Rebuild failure after writes | `500`; previous db/index keeps serving if it existed. |\n\n6. Security considerations\nUnauthenticated local JSON is the new trust boundary. Bind only to `127.0.0.1` and document not to expose it. Validate ids and resolved paths to stop traversal. Use no shell from HTTP; quote paths in `run_instance.sh`. Keep SQL parameterized via existing Index methods. Limit body/batch size to reduce local resource abuse. Do not log note bodies/secrets. No auth is added because scope is offline localhost.\n\n7. Test plan\n- `tests/test_chunking.py::test_instance_defaults_to_source_and_honors_env_on_reload`: default and env override.\n- `tests/test_chunking.py::test_format_search_hits_matches_existing_mcp_shape`: formatted hit text and `no matches`.\n- `tests/test_http_service.py::test_health_and_list_return_instance_and_index_state`: fake index health/list JSON.\n- `tests/test_http_service.py::test_search_endpoint_formats_filters_and_validates_params`: q/k/mode/path/tags passed through, k clamped, display returned, bad params rejected.\n- `tests/test_http_service.py::test_ingest_writes_markdown_rebuilds_reloads_and_searches`: file path/content, incremental build call, reload, search visibility.\n- `tests/test_http_service.py::test_ingest_is_idempotent_upsert_and_isolated_by_vault`: same id overwrites; two temp vaults do not leak results.\n- `tests/test_http_service.py::test_ingest_rejects_malformed_duplicate_traversal_and_oversize_without_writes`: malformed JSON, duplicate ids, traversal ids, 413, no files.\n- `tests/test_http_service.py::test_rebuild_failure_returns_500_and_keeps_old_index`: old search/list still works after simulated build error.\nExisting `tests/test_chunking.py` must keep passing.\nTests required: yes\n\n8. Review focus\n- Accidental MCP rename or output drift.\n- `/search` JSON shape compatibility with agent-smith.\n- Ingest id/tag validation too strict or too loose.\n- SQLite connection leaks or stale index after repeated ingest.\n- Docs overstating safety of an unauthenticated service.\n\n9. Assumptions\n- `id` is a slash-separated relative stem such as `findings/host-1`; service appends `.md`.\n- `title` and `text` are required strings; `tags` is optional simple slug strings.\n- Markdown output is frontmatter `tags: [..]`, `# title`, blank line, then text; no YAML dependency.\n- Request limits are fixed constants in `serve_http.py`.\n\n10. Suspicious content\nnone\n\nSize: standard\nRisk level: medium\nReason: unauthenticated localhost clients can write files into a vault and trigger index rebuilds; bad validation could corrupt data or allow path traversal, though exposure is localhost-only.",
-          "failure_class": "",
-          "human.gate.label": "[A] Approve",
-          "thread.approve.current_node": "implement",
-          "last_stage": "security_review",
-          "command.output": "blob://sha256/264be39c95483d3b9a483d4099d05d1dc07bebf6c7654d44139e1b8952da915d",
           "internal.retry_count.spec": 0,
-          "thread.strong.current_node": "security_review",
-          "thread.start.current_node": "check_issue",
-          "thread.implement.current_node": "verify",
-          "thread.save_spec.current_node": "approve",
-          "graph.max_node_visits": "30",
-          "thread.review_gate.current_node": "release",
-          "internal.work_dir": "/workspace/Source",
-          "human.gate.selected": "A",
-          "thread.security_review.current_node": "review_gate",
-          "failure_signature": "",
-          "response.security_review": "Verdict: pass\n\nBlocking findings: none\n\n# Security review\n\n## Summary\nNo security findings were identified in the re-review; blocking findings by severity: blocking 0, non-blocking 0. The two previous blocking findings were rechecked against `/tmp/fabro/since-review.diff`: `/ingest` now requires `application/json` before reading the body, and dotted IDs now append `.md` while duplicate resolved targets are rejected before writes.\n\n## Changed files triage\n| File | Risk | Blast radius |\n|---|---:|---|\n| `serve_http.py` | HIGH | New localhost HTTP surface. `make_server` is called by `main`/tests; `/ingest` reaches `validate_notes`, `note_path_for_id`, `render_markdown`, `source_rag.build`, and `Index` reload. Concrete attacker considered: a local unauthenticated process or malicious web page attempting browser-simple POSTs to `127.0.0.1` to write vault files; the Content-Type guard makes the browser-simple JSON path unreachable, while same-host non-browser clients remain in-scope by design. |\n| `source_rag.py` | MEDIUM | `MCP_NAME` used by `mcp_server`; formatter called by MCP and HTTP; `Index.close` called by HTTP state reload/close. |\n| `mcp_server.py` | MEDIUM | One MCP tool output path (`search_notes`) now delegates to shared formatter; 2 production formatter callers total. |\n| `run_instance.sh` | MEDIUM | New launcher/entry point, no repository callers outside documentation; reviewed quoting and localhost-only delegation. |\n| `pyproject.toml` | LOW | Packaging entry points only. |\n| `README.md` | LOW | Documentation only. |\n| `tests/test_chunking.py` | LOW | Tests only. |\n| `tests/test_http_service.py` | LOW | Tests only. |\n\n## Findings\nNone.\n\n## Test coverage gaps\nNo blocking gaps found. Targeted tests for the prior findings were run: `tests/test_http_service.py::test_ingest_requires_application_json_and_avoids_writes_or_rebuild` and `tests/test_http_service.py::test_ingest_accepts_dotted_ids_and_rejects_duplicate_targets` both passed. I did not rerun the whole suite because the review instructions said automated checks already passed.\n\n## What I did not cover\nThis was a re-review, so I focused on `/tmp/fabro/since-review.diff` and verified the two earlier findings plus the newly changed validation paths. I did not perform a fresh audit of unchanged HTTP request parsing, SQLite internals, model loading, or benchmark code.",
-          "human.gate.approve.answer": "A",
-          "outcome": "succeeded",
-          "internal.retry_count.install": 0,
-          "internal.node_visit_count": 1,
-          "preferred_label": "[A] Approve",
+          "failure_class": "",
+          "human.gate.approve.question": "Approve the spec? To have it revised, type what should change.",
+          "internal.retry_count.start": 0,
           "human.gate.approve.label": "[A] Approve",
           "last_response": "Verdict: pass\n\nBlocking findings: none\n\n# Security review\n\n## Summary\nNo security findings were identified in the re-review; blocking findings by severity: blocking 0, non-blocking 0. The two previous",
-          "graph.rankdir": "LR",
-          "internal.run_id": "01M8C87T65E2JN1VPVQHFA38KS",
-          "response.implement": "Implemented the two reviewer-requested fixes in `serve_http.py` and added regression tests.\n\nWhat I changed\n- Added a `/ingest` media-type guard:\n  - `POST /ingest` now requires `Content-Type: application/json`\n  - Parameters like `; charset=utf-8` are accepted\n  - Missing or non-JSON media types return `415` before any body parsing, file writes, or rebuilds\n- Fixed ingest note path resolution:\n  - `note_path_for_id()` now appends `.md` to the validated id segment instead of replacing an existing suffix\n  - Example: `releases/v1.2` now writes to `vault/releases/v1.2.md`\n- Added duplicate target detection during validation:\n  - `validate_notes()` now tracks resolved destination paths and rejects duplicate targets before any writes\n\nTest coverage for the todo items\n- Todo 1: browser-simple-request / CSRF-style media-type issue\n  - Covered by `tests/test_http_service.py::test_ingest_requires_application_json_and_avoids_writes_or_rebuild`\n- Todo 2: dotted ids and duplicate resolved targets\n  - Covered by `tests/test_http_service.py::test_ingest_accepts_dotted_ids_and_rejects_duplicate_targets`\n\nWhat I ran\n- `python3 -m pytest -q tests/test_http_service.py -k 'requires_application_json or dotted_ids'`\n- `python3 -m pytest -q tests/test_http_service.py`\n- `python3 -m pytest -q`\n\nObserved results\n- Focused regression tests: passed\n- Full HTTP service test file: passed\n- Full test suite: passed\n\nNoticed, not touched\n- None\n\nSTATUS: DONE",
-          "internal.retry_count.review_gate": 0,
-          "thread.spec.current_node": "save_spec",
-          "thread.check_issue.current_node": "install",
+          "thread.start.current_node": "check_issue",
+          "internal.work_dir": "/workspace/Source",
+          "thread.implement.current_node": "verify",
+          "thread.review_gate.current_node": "release",
+          "internal.retry_count.install": 0,
           "internal.retry_count.security_review": 0,
-          "graph.loop_restart_signature_limit": "10",
-          "graph.goal": "Resolve the next maintainer-approved GitHub issue of 0x0pointer/Source with a reviewed spec, code, and passing tests",
-          "internal.retry_count.start": 0,
-          "internal.fidelity": "compact",
-          "current_node": "release",
-          "internal.retry_count.approve": 0,
           "internal.retry_count.check_issue": 0,
-          "internal.retry_count.save_spec": 0,
-          "internal.retry_count.implement": 0,
           "internal.retry_count.release": 0,
-          "internal.thread_id": "review_gate",
+          "thread.security_review.current_node": "review_gate",
           "internal.retry_count.verify": 0,
-          "graph.model_stylesheet": "\n            *       { model: gpt-5.4; reasoning_effort: medium; }\n            .strong { model: gpt-5.5; reasoning_effort: high; }\n        ",
-          "human.gate.approve.question": "Approve the spec? To have it revised, type what should change."
+          "human.gate.selected": "A",
+          "thread.check_issue.current_node": "install",
+          "failure_signature": "",
+          "response.implement": "Implemented the two reviewer-requested fixes in `serve_http.py` and added regression tests.\n\nWhat I changed\n- Added a `/ingest` media-type guard:\n  - `POST /ingest` now requires `Content-Type: application/json`\n  - Parameters like `; charset=utf-8` are accepted\n  - Missing or non-JSON media types return `415` before any body parsing, file writes, or rebuilds\n- Fixed ingest note path resolution:\n  - `note_path_for_id()` now appends `.md` to the validated id segment instead of replacing an existing suffix\n  - Example: `releases/v1.2` now writes to `vault/releases/v1.2.md`\n- Added duplicate target detection during validation:\n  - `validate_notes()` now tracks resolved destination paths and rejects duplicate targets before any writes\n\nTest coverage for the todo items\n- Todo 1: browser-simple-request / CSRF-style media-type issue\n  - Covered by `tests/test_http_service.py::test_ingest_requires_application_json_and_avoids_writes_or_rebuild`\n- Todo 2: dotted ids and duplicate resolved targets\n  - Covered by `tests/test_http_service.py::test_ingest_accepts_dotted_ids_and_rejects_duplicate_targets`\n\nWhat I ran\n- `python3 -m pytest -q tests/test_http_service.py -k 'requires_application_json or dotted_ids'`\n- `python3 -m pytest -q tests/test_http_service.py`\n- `python3 -m pytest -q`\n\nObserved results\n- Focused regression tests: passed\n- Full HTTP service test file: passed\n- Full test suite: passed\n\nNoticed, not touched\n- None\n\nSTATUS: DONE",
+          "graph.rankdir": "LR",
+          "command.output": "blob://sha256/264be39c95483d3b9a483d4099d05d1dc07bebf6c7654d44139e1b8952da915d",
+          "thread.approve.current_node": "implement",
+          "response.spec": "DECISION NEEDED: `/search` could be MCP text, structured JSON, or both; choose structured JSON plus a `display` string from the same formatter as MCP, preserving compact rendering while making HTTP parseable.\n\n1. Intent\nAdd a stdlib-only localhost HTTP service for one Source `{vault, db}` instance. It must search/list an already built index, ingest mechanical-memory notes as Markdown, refresh the existing incremental SQLite index, and reload it. Add `INSTANCE` identity, default `source`, for service self-reporting without breaking existing CLI/MCP defaults.\n\n2. Acceptance criteria\n1. `INSTANCE` unset keeps existing `source` behavior; `INSTANCE=eng-a` makes `GET /health` return `instance: \"eng-a\"`.\n2. `serve_http.py --vault V --db D --port P` and `run_instance.sh NAME --vault V --db D --port P` serve only on `127.0.0.1:P` and use that vault/db.\n3. `GET /search?q=...&k=&mode=&path=&tags=` returns `200 application/json` with `results` entries containing rank/path/heading/score/text/tags/display and top-level `display`; display text matches MCP `path › heading` snippets, and no hits returns `results: []`, `display: \"no matches\"`.\n4. `GET /list` returns indexed notes plus metadata; `GET /health` returns readiness, instance, vault, db, and metadata when present.\n5. `POST /ingest` `{notes:[{id,title,tags,text}]}` writes valid notes to `vault/<id>.md`, creates id subdirectories, calls incremental `source_rag.build(...)`, reloads the index, and makes notes searchable/listed.\n6. Reposting the same `id` overwrites one file/index entry; two services with different vault/db/ports remain isolated.\n7. Existing `build_index.py`, `query.py`, and `mcp_server.py` behavior remains, including incremental reuse, path/tag filtering, and MCP output text.\n8. README documents multi-instance agent-smith usage and endpoint shapes; no new runtime dependency is added.\n\n3. Boundaries\nAlways: use stdlib `http.server`/`json`; use `R.VAULT_ENV`, `R.DB_ENV`, `R.DEFAULT_*`, `R.build`, `R.Index.search`, `R.Index.list_notes`; share search display formatting through `source_rag.py`.\nNever: add HTTP framework/deps, bind beyond localhost, change CI/deployment, remove/limit CLI or MCP, or write/index outside the selected vault.\n\n4. Code map\n- `source_rag.py`: add `INSTANCE_ENV`, `INSTANCE`, `format_search_hits(hits: list[dict]) -> str`; make `MCP_NAME` default to `source` and honor `INSTANCE`. Existing tests: `tests/test_chunking.py` build/search.\n- `mcp_server.py`: replace inline search formatting with `R.format_search_hits(...)` without changing output.\n- `serve_http.py` (new): `main(argv=None)`, localhost `HTTPServer`, JSON helpers, `/health`, `/list`, `/search`, `/ingest`, safe ingest validation/writes, rebuild/reload.\n- `run_instance.sh` (new): parse `<name> --vault <dir> --db <file> --port <n>`, export `INSTANCE`/`SOURCE_VAULT`/`SOURCE_DB`, run `.venv/bin/python serve_http.py ...`.\n- `README.md`: add multi-instance agent-smith section and endpoint examples.\n- `pyproject.toml`: include `serve_http` in `py-modules`; add `source-http` script only if consistent with existing scripts.\n- Tests: add `tests/test_http_service.py`; update `tests/test_chunking.py` for formatter/instance tests.\n\n5. Edge cases\n| Input/state | Expected behaviour |\n|---|---|\n| Missing/blank `/search` `q` | `400` JSON error. |\n| `k` absent, non-integer, outside range | default 3; non-integer `400`; integer clamped to 1..20. |\n| Invalid `mode` | `400`; only `hybrid`, `vector`, `keyword`. |\n| No ready index | health `200` with not-ready; search/list `503`; ingest may create the first index. |\n| Malformed JSON or missing `notes` list | `400`; no writes/rebuild. |\n| Oversized body | `413` before writes. |\n| Empty batch, too many notes, or duplicate ids | `400`; no writes. |\n| Absolute id, `..`, empty segments, backslash, NUL, bad chars | `400`; no write outside vault. |\n| Concurrent requests | Single-threaded serialization; no half-swapped db observed. |\n| Rebuild failure after writes | `500`; previous db/index keeps serving if it existed. |\n\n6. Security considerations\nUnauthenticated local JSON is the new trust boundary. Bind only to `127.0.0.1` and document not to expose it. Validate ids and resolved paths to stop traversal. Use no shell from HTTP; quote paths in `run_instance.sh`. Keep SQL parameterized via existing Index methods. Limit body/batch size to reduce local resource abuse. Do not log note bodies/secrets. No auth is added because scope is offline localhost.\n\n7. Test plan\n- `tests/test_chunking.py::test_instance_defaults_to_source_and_honors_env_on_reload`: default and env override.\n- `tests/test_chunking.py::test_format_search_hits_matches_existing_mcp_shape`: formatted hit text and `no matches`.\n- `tests/test_http_service.py::test_health_and_list_return_instance_and_index_state`: fake index health/list JSON.\n- `tests/test_http_service.py::test_search_endpoint_formats_filters_and_validates_params`: q/k/mode/path/tags passed through, k clamped, display returned, bad params rejected.\n- `tests/test_http_service.py::test_ingest_writes_markdown_rebuilds_reloads_and_searches`: file path/content, incremental build call, reload, search visibility.\n- `tests/test_http_service.py::test_ingest_is_idempotent_upsert_and_isolated_by_vault`: same id overwrites; two temp vaults do not leak results.\n- `tests/test_http_service.py::test_ingest_rejects_malformed_duplicate_traversal_and_oversize_without_writes`: malformed JSON, duplicate ids, traversal ids, 413, no files.\n- `tests/test_http_service.py::test_rebuild_failure_returns_500_and_keeps_old_index`: old search/list still works after simulated build error.\nExisting `tests/test_chunking.py` must keep passing.\nTests required: yes\n\n8. Review focus\n- Accidental MCP rename or output drift.\n- `/search` JSON shape compatibility with agent-smith.\n- Ingest id/tag validation too strict or too loose.\n- SQLite connection leaks or stale index after repeated ingest.\n- Docs overstating safety of an unauthenticated service.\n\n9. Assumptions\n- `id` is a slash-separated relative stem such as `findings/host-1`; service appends `.md`.\n- `title` and `text` are required strings; `tags` is optional simple slug strings.\n- Markdown output is frontmatter `tags: [..]`, `# title`, blank line, then text; no YAML dependency.\n- Request limits are fixed constants in `serve_http.py`.\n\n10. Suspicious content\nnone\n\nSize: standard\nRisk level: medium\nReason: unauthenticated localhost clients can write files into a vault and trigger index rebuilds; bad validation could corrupt data or allow path traversal, though exposure is localhost-only.",
+          "thread.save_spec.current_node": "approve",
+          "graph.max_node_visits": "30",
+          "outcome": "succeeded",
+          "last_stage": "security_review",
+          "thread.spec.current_node": "save_spec",
+          "internal.retry_count.review_gate": 0,
+          "thread.strong.current_node": "security_review",
+          "human.gate.label": "[A] Approve",
+          "graph.loop_restart_signature_limit": "10",
+          "internal.fidelity": "compact",
+          "internal.run_id": "01M8C87T65E2JN1VPVQHFA38KS",
+          "preferred_label": "[A] Approve",
+          "human.gate.approve.answer": "A",
+          "internal.retry_count.implement": 0,
+          "internal.node_visit_count": 1,
+          "internal.thread_id": "review_gate",
+          "graph.goal": "Resolve the next maintainer-approved GitHub issue of 0x0pointer/Source with a reviewed spec, code, and passing tests",
+          "internal.retry_count.approve": 0,
+          "internal.retry_count.save_spec": 0,
+          "response.security_review": "Verdict: pass\n\nBlocking findings: none\n\n# Security review\n\n## Summary\nNo security findings were identified in the re-review; blocking findings by severity: blocking 0, non-blocking 0. The two previous blocking findings were rechecked against `/tmp/fabro/since-review.diff`: `/ingest` now requires `application/json` before reading the body, and dotted IDs now append `.md` while duplicate resolved targets are rejected before writes.\n\n## Changed files triage\n| File | Risk | Blast radius |\n|---|---:|---|\n| `serve_http.py` | HIGH | New localhost HTTP surface. `make_server` is called by `main`/tests; `/ingest` reaches `validate_notes`, `note_path_for_id`, `render_markdown`, `source_rag.build`, and `Index` reload. Concrete attacker considered: a local unauthenticated process or malicious web page attempting browser-simple POSTs to `127.0.0.1` to write vault files; the Content-Type guard makes the browser-simple JSON path unreachable, while same-host non-browser clients remain in-scope by design. |\n| `source_rag.py` | MEDIUM | `MCP_NAME` used by `mcp_server`; formatter called by MCP and HTTP; `Index.close` called by HTTP state reload/close. |\n| `mcp_server.py` | MEDIUM | One MCP tool output path (`search_notes`) now delegates to shared formatter; 2 production formatter callers total. |\n| `run_instance.sh` | MEDIUM | New launcher/entry point, no repository callers outside documentation; reviewed quoting and localhost-only delegation. |\n| `pyproject.toml` | LOW | Packaging entry points only. |\n| `README.md` | LOW | Documentation only. |\n| `tests/test_chunking.py` | LOW | Tests only. |\n| `tests/test_http_service.py` | LOW | Tests only. |\n\n## Findings\nNone.\n\n## Test coverage gaps\nNo blocking gaps found. Targeted tests for the prior findings were run: `tests/test_http_service.py::test_ingest_requires_application_json_and_avoids_writes_or_rebuild` and `tests/test_http_service.py::test_ingest_accepts_dotted_ids_and_rejects_duplicate_targets` both passed. I did not rerun the whole suite because the review instructions said automated checks already passed.\n\n## What I did not cover\nThis was a re-review, so I focused on `/tmp/fabro/since-review.diff` and verified the two earlier findings plus the newly changed validation paths. I did not perform a fresh audit of unchanged HTTP request parsing, SQLite internals, model loading, or benchmark code.",
+          "current_node": "release",
+          "graph.model_stylesheet": "\n            *       { model: gpt-5.4; reasoning_effort: medium; }\n            .strong { model: gpt-5.5; reasoning_effort: high; }\n        "
         },
         "node_outcomes": {
+          "review_gate": {
+            "status": "succeeded",
+            "context_updates": {
+              "command.output": "blob://sha256/59636a9c1d79fcf83ed69d7f7f4148bb51e472cc789ea6fc3b508539625f4ecb"
+            },
+            "notes": "Script completed: \nimport json, os, shutil, subprocess, sys\nD = '/tmp/fabro'\nNL = chr(10)\nMAX_ROUNDS = int('3')\ndef run(cmd, env=None):\n    p = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors='replace', env=env)\n    return p.returncode, p.stdout\ndef read(path):\n    try:\n        with open(path) as f:\n            return f.read()\n    except OSError:\n        return ''\ndef write(path, text):\n    with open(path, 'w') as f:\n        f.write(text)\ndef remove(*names):\n    for name in names:\n        if os.path.exists(D + '/' + name):\n            os.remove(D + '/' + name)\ndef snapshot():\n    # Same as in the verify step: the working tree as a git tree object.\n    index = D + '/index'\n    rc, source = run('git rev-parse --git-path index')\n    try:\n        shutil.copyfile(source.strip(), index)\n    except OSError:\n        if os.path.exists(index):\n            os.remove(index)\n    rc, out = run('git add -A . && git write-tree', dict(os.environ, GIT_INDEX_FILE=index))\n    last = (out.strip().splitlines() or [''])[-1].strip()\n    return last if rc == 0 else ''\ndef stop(route, message):\n    print(route)\n    print(message.replace('ROUTE_', 'ROUTE-')[:3000])\n    sys.exit(1)\ndef render(items):\n    rows = []\n    for i, f in enumerate(items, 1):\n        rows.append(str(i) + '. [' + str(f.get('category', 'general')) + '] ' + str(f.get('file', '?')) + ':' + str(f.get('line', '?'))\n            + NL + '   Problem: ' + str(f.get('problem', '')) + NL + '   Required fix: ' + str(f.get('fix', '')))\n    return NL.join(rows)\ntier = read(D + '/review_tier').strip() or 'security'\nTREE = snapshot()\nif not TREE or TREE != read(D + '/review_tree').strip():\n    stop('ROUTE_reverify', 'The repository changed during review. Reviewers must not edit files. Running verification again.')\nverdict, summary, findings, problem, wants_security = '', '', [], '', False\ntry:\n    with open(D + '/review.json') as f:\n        data = json.load(f)\n    verdict = str(data.get('verdict', '')).strip().lower()\n    summary = str(data.get('summary', ''))\n    findings = [x for x in (data.get('findings') or []) if isinstance(x, dict)]\n    wants_security = str(data.get('needs_security_review', '')).strip().lower() == 'true'\nexcept Exception as exc:\n    problem = 'no readable verdict in /tmp/fabro/review.json (' + type(exc).__name__ + ')'\nremove('review.json')\nblocking = [x for x in findings if str(x.get('severity', '')).strip().lower() == 'blocking']\nnotes = [x for x in findings if x not in blocking]\nif not problem and verdict not in ('pass', 'fail'):\n    problem = 'unknown verdict: ' + verdict[:40]\nif not problem and verdict == 'pass' and blocking:\n    verdict = 'fail'\nif not problem and verdict == 'fail' and not blocking:\n    problem = 'verdict is fail but no blocking finding was given'\nhand_over = tier == 'standard' and (wants_security or bool(problem))\nif hand_over:\n    # From now on this change is reviewed by the security reviewer.\n    write(D + '/force_security', '1')\n    write(D + '/review_tier', 'security')\nif problem:\n    if hand_over:\n        stop('ROUTE_security', 'Handing over to the security reviewer: ' + problem)\n    stop('ROUTE_human', 'The security reviewer did not reach a usable verdict: ' + problem)\nif verdict == 'pass' and hand_over:\n    with open(D + '/review-brief.md', 'a') as f:\n        f.write(NL + 'The standard reviewer found nothing blocking and asked for a security review: ' + summary[:1500] + NL)\n    stop('ROUTE_security', 'The standard reviewer asked for a security review: ' + summary)\nif verdict == 'pass':\n    text = '# Review passed (' + tier + ' reviewer)' + NL + NL + summary + NL\n    if notes:\n        text += NL + '## Non-blocking notes' + NL + render(notes) + NL\n    write(D + '/review-notes.md', text)\n    remove('todo.md', 'last-review.md', 'fix-notes.md')\n    print('REVIEW PASSED (' + tier + ' reviewer), ' + str(len(notes)) + ' non-blocking note(s)')\n    print(summary[:1500])\n    sys.exit(0)\ntry:\n    rounds = int(read(D + '/review_rounds').strip() or 0) + 1\nexcept ValueError:\n    rounds = MAX_ROUNDS\nwrite(D + '/review_rounds', str(rounds))\nbody = summary + NL + NL + '## Blocking findings - every one must be fixed' + NL + render(blocking) + NL\nwrite(D + '/last-review.md', '# Review rejected the change (round ' + str(rounds) + ', ' + tier + ' reviewer)' + NL + NL + body)\nwrite(D + '/todo.md', '# Fix this: an independent reviewer rejected the change (round ' + str(rounds) + ')' + NL + NL + body\n    + NL + 'The spec is /tmp/fabro/spec.md. The complete change as reviewed is /tmp/fabro/change.diff.' + NL)\nwrite(D + '/reviewed_tree', TREE)\nremove('fix-notes.md')\nspec_fault = any(str(x.get('category', '')).strip().lower() == 'spec' for x in blocking)\nif rounds >= MAX_ROUNDS:\n    route = 'ROUTE_human'\nelif spec_fault:\n    route = 'ROUTE_human (a finding says the spec itself is wrong)'\nelif rounds == 1:\n    route = 'ROUTE_implement'\nelse:\n    route = 'ROUTE_deep'\nstop(route, 'REVIEW REJECTED, round ' + str(rounds) + ' of ' + str(MAX_ROUNDS) + ', ' + str(len(blocking)) + ' blocking finding(s):' + NL + render(blocking))",
+            "usage": null,
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 0,
+              "tool_time_ms": 690,
+              "active_time_ms": 690
+            }
+          },
           "spec": {
             "status": "succeeded",
             "context_updates": {
@@ -3940,56 +3954,6 @@
               "active_time_ms": 154596
             }
           },
-          "check_issue": {
-            "status": "succeeded",
-            "context_updates": {
-              "command.output": "blob://sha256/cc6d99ab2afbbbbd25e592ac7b31f1aed8a6325eb204576f7535f36fc69586b2"
-            },
-            "notes": "Script completed: \nimport json, os, sys, urllib.parse, urllib.request\nREPO_OWNER, REPO_NAME = '0x0pointer', 'Source'\nRAW_NUMBER = '0'.strip()\nLABEL = 'fabro-approved'\nCLAIM = 'fabro-in-progress'\nBUILT = 'fabro-built'\nFAILED = 'fabro-failed'\nMAINTAINERS = set(m.strip().lower() for m in 'RiieCco,blabla1337,JorgeCarvalhoPT'.split(',') if m.strip())\nclass Refused(Exception):\n    pass\ndef refuse(msg):\n    print('REFUSED: ' + msg)\n    sys.exit(1)\ntoken = os.environ.get('GITHUB_TOKEN')\nif not token:\n    refuse('no GITHUB_TOKEN in the sandbox, cannot verify approval')\nif not RAW_NUMBER.isdigit():\n    refuse('issue must be a number; 0 picks the oldest approved issue')\nNUMBER = int(RAW_NUMBER)\ndef send(url, body):\n    req = urllib.request.Request(url, data=json.dumps(body).encode(),\n        headers=dict(Authorization='Bearer ' + token, Accept='application/json'))\n    return json.load(urllib.request.urlopen(req, timeout=30))\ndef graphql(query, **variables):\n    reply = send('https://api.github.com/graphql',\n        dict(query=query, variables=dict(variables, o=REPO_OWNER, n=REPO_NAME)))\n    if reply.get('errors'):\n        refuse('GitHub API error: ' + json.dumps(reply['errors'])[:300])\n    return reply['data']['repository']\nISSUE_QUERY = '''\nquery($o: String!, $n: String!, $i: Int!) {\n  repository(owner: $o, name: $n) {\n    issue(number: $i) {\n      title\n      body\n      state\n      lastEditedAt\n      author { login }\n      labels(first: 50) { nodes { name } }\n      timelineItems(itemTypes: [LABELED_EVENT], last: 100) {\n        nodes { ... on LabeledEvent { createdAt actor { login } label { name } } }\n      }\n    }\n  }\n}\n'''\nLIST_QUERY = '''\nquery($o: String!, $n: String!, $l: String!) {\n  repository(owner: $o, name: $n) {\n    issues(first: 100, states: [OPEN], labels: [$l], orderBy: { field: CREATED_AT, direction: ASC }) {\n      nodes { number labels(first: 50) { nodes { name } } }\n    }\n  }\n}\n'''\ndef approved(number):\n    # The approval check itself. Raises Refused unless every condition holds.\n    issue = graphql(ISSUE_QUERY, i=number)['issue']\n    if issue is None:\n        raise Refused('issue not found (pull requests are not accepted)')\n    if issue['state'] != 'OPEN':\n        raise Refused('issue is not open')\n    if LABEL not in [l['name'] for l in issue['labels']['nodes']]:\n        raise Refused('issue does not carry the label ' + LABEL)\n    events = [e for e in issue['timelineItems']['nodes'] if e and e['label']['name'] == LABEL]\n    if not events:\n        raise Refused('no labelling event found for ' + LABEL)\n    last = events[-1]\n    actor = ((last.get('actor') or dict()).get('login') or '').lower()\n    if actor not in MAINTAINERS:\n        raise Refused('label was applied by ' + (actor or 'unknown') + ', who is not a listed maintainer')\n    edited = issue.get('lastEditedAt')\n    if edited and edited > last['createdAt']:\n        raise Refused('issue text was edited after approval; a maintainer must re-apply the label')\n    return issue, actor, last['createdAt']\ndef claim(number, labels):\n    # Mark the issue as being built. While it carries this label no run\n    # started without a number picks another issue: one build at a time.\n    base = 'https://api.github.com/repos/' + REPO_OWNER + '/' + REPO_NAME + '/issues/' + str(number) + '/labels'\n    send(base, dict(labels=[CLAIM]))\n    for old in (BUILT, FAILED):\n        if old in labels:\n            try:\n                req = urllib.request.Request(base + '/' + urllib.parse.quote(old), method='DELETE',\n                    headers=dict(Authorization='Bearer ' + token, Accept='application/json'))\n                urllib.request.urlopen(req, timeout=30).read()\n            except Exception:\n                pass\nif NUMBER > 0:\n    # A specific issue was asked for (-I issue=<number>, or construct-build).\n    try:\n        issue, actor, when = approved(NUMBER)\n    except Refused as exc:\n        refuse(str(exc))\n    try:\n        claim(NUMBER, [l['name'] for l in issue['labels']['nodes']])\n    except Exception as exc:\n        print('warning: could not add the label ' + CLAIM + ' (' + type(exc).__name__ + ')')\nelse:\n    # No issue given (an automation run): take the oldest open, approved issue\n    # that no run has handled yet. Every candidate still has to pass the full\n    # approval check; one that fails is skipped, not built.\n    # One build at a time: nothing is picked while another issue is being built.\n    busy = [n['number'] for n in graphql(LIST_QUERY, l=CLAIM)['issues']['nodes']]\n    if busy:\n        print('WAITING: issue ' + str(busy[0]) + ' is still being built (label ' + CLAIM + '). One issue is built at a time.')\n        print('If no run is working on it any more, remove that label from the issue.')\n        sys.exit(1)\n    issue = None\n    candidates = graphql(LIST_QUERY, l=LABEL)['issues']['nodes']\n    for node in candidates:\n        number = node['number']\n        handled = [l['name'] for l in node['labels']['nodes'] if l['name'] in (BUILT, FAILED)]\n        if handled:\n            print('skipped issue', number, '- already handled (label ' + handled[0] + ')')\n            continue\n        try:\n            issue, actor, when = approved(number)\n        except Refused as exc:\n            print('skipped issue', number, '-', exc)\n            continue\n        NUMBER = number\n        break\n    if issue is None:\n        print('NOTHING TO BUILD: no open issue labelled ' + LABEL + ' is waiting (' + str(len(candidates)) + ' checked).')\n        print('To build an issue again, remove its ' + BUILT + ' or ' + FAILED + ' label.')\n        sys.exit(1)\n    try:\n        claim(NUMBER, [])\n    except Exception as exc:\n        refuse('could not add the label ' + CLAIM + ' to issue ' + str(NUMBER) + ' (' + type(exc).__name__ + '); not building it, because the next run would pick it again')\nos.makedirs('/tmp/fabro', exist_ok=True)\nwith open('/tmp/fabro/issue.md', 'w') as f:\n    f.write('# ' + issue['title'] + chr(10) + chr(10) + (issue['body'] or '') + chr(10))\nwith open('/tmp/fabro/issue_number', 'w') as f:\n    f.write(str(NUMBER))\nprint('APPROVED: issue', NUMBER, 'released by', actor, 'at', when)\nprint('title:', issue['title'])",
-            "usage": null,
-            "timing": {
-              "wall_time_ms": 0,
-              "inference_time_ms": 0,
-              "tool_time_ms": 3756,
-              "active_time_ms": 3756
-            }
-          },
-          "implement": {
-            "status": "succeeded",
-            "context_updates": {
-              "last_stage": "implement",
-              "last_response": "Implemented the two reviewer-requested fixes in `serve_http.py` and added regression tests.\n\nWhat I changed\n- Added a `/ingest` media-type guard:\n  - `POST /ingest` now requires `Content-Type: applica",
-              "response.implement": "Implemented the two reviewer-requested fixes in `serve_http.py` and added regression tests.\n\nWhat I changed\n- Added a `/ingest` media-type guard:\n  - `POST /ingest` now requires `Content-Type: application/json`\n  - Parameters like `; charset=utf-8` are accepted\n  - Missing or non-JSON media types return `415` before any body parsing, file writes, or rebuilds\n- Fixed ingest note path resolution:\n  - `note_path_for_id()` now appends `.md` to the validated id segment instead of replacing an existing suffix\n  - Example: `releases/v1.2` now writes to `vault/releases/v1.2.md`\n- Added duplicate target detection during validation:\n  - `validate_notes()` now tracks resolved destination paths and rejects duplicate targets before any writes\n\nTest coverage for the todo items\n- Todo 1: browser-simple-request / CSRF-style media-type issue\n  - Covered by `tests/test_http_service.py::test_ingest_requires_application_json_and_avoids_writes_or_rebuild`\n- Todo 2: dotted ids and duplicate resolved targets\n  - Covered by `tests/test_http_service.py::test_ingest_accepts_dotted_ids_and_rejects_duplicate_targets`\n\nWhat I ran\n- `python3 -m pytest -q tests/test_http_service.py -k 'requires_application_json or dotted_ids'`\n- `python3 -m pytest -q tests/test_http_service.py`\n- `python3 -m pytest -q`\n\nObserved results\n- Focused regression tests: passed\n- Full HTTP service test file: passed\n- Full test suite: passed\n\nNoticed, not touched\n- None\n\nSTATUS: DONE"
-            },
-            "notes": "Stage completed: implement",
-            "usage": {
-              "input": {
-                "usage": {
-                  "model": {
-                    "provider": "openai",
-                    "model_id": "gpt-5.4"
-                  },
-                  "tokens": {
-                    "input_tokens": 33278,
-                    "output_tokens": 3087,
-                    "reasoning_tokens": 2738,
-                    "cache_read_tokens": 207872,
-                    "cache_write_tokens": 0
-                  }
-                },
-                "facts": {
-                  "algorithm": "openai"
-                }
-              },
-              "total_usd_micros": 222538
-            },
-            "timing": {
-              "wall_time_ms": 0,
-              "inference_time_ms": 91502,
-              "tool_time_ms": 29371,
-              "active_time_ms": 120873
-            }
-          },
           "verify": {
             "status": "succeeded",
             "context_updates": {
@@ -4002,6 +3966,24 @@
               "inference_time_ms": 0,
               "tool_time_ms": 12153,
               "active_time_ms": 12153
+            }
+          },
+          "start": {
+            "status": "succeeded",
+            "usage": null
+          },
+          "check_issue": {
+            "status": "succeeded",
+            "context_updates": {
+              "command.output": "blob://sha256/cc6d99ab2afbbbbd25e592ac7b31f1aed8a6325eb204576f7535f36fc69586b2"
+            },
+            "notes": "Script completed: \nimport json, os, sys, urllib.parse, urllib.request\nREPO_OWNER, REPO_NAME = '0x0pointer', 'Source'\nRAW_NUMBER = '0'.strip()\nLABEL = 'fabro-approved'\nCLAIM = 'fabro-in-progress'\nBUILT = 'fabro-built'\nFAILED = 'fabro-failed'\nMAINTAINERS = set(m.strip().lower() for m in 'RiieCco,blabla1337,JorgeCarvalhoPT'.split(',') if m.strip())\nclass Refused(Exception):\n    pass\ndef refuse(msg):\n    print('REFUSED: ' + msg)\n    sys.exit(1)\ntoken = os.environ.get('GITHUB_TOKEN')\nif not token:\n    refuse('no GITHUB_TOKEN in the sandbox, cannot verify approval')\nif not RAW_NUMBER.isdigit():\n    refuse('issue must be a number; 0 picks the oldest approved issue')\nNUMBER = int(RAW_NUMBER)\ndef send(url, body):\n    req = urllib.request.Request(url, data=json.dumps(body).encode(),\n        headers=dict(Authorization='Bearer ' + token, Accept='application/json'))\n    return json.load(urllib.request.urlopen(req, timeout=30))\ndef graphql(query, **variables):\n    reply = send('https://api.github.com/graphql',\n        dict(query=query, variables=dict(variables, o=REPO_OWNER, n=REPO_NAME)))\n    if reply.get('errors'):\n        refuse('GitHub API error: ' + json.dumps(reply['errors'])[:300])\n    return reply['data']['repository']\nISSUE_QUERY = '''\nquery($o: String!, $n: String!, $i: Int!) {\n  repository(owner: $o, name: $n) {\n    issue(number: $i) {\n      title\n      body\n      state\n      lastEditedAt\n      author { login }\n      labels(first: 50) { nodes { name } }\n      timelineItems(itemTypes: [LABELED_EVENT], last: 100) {\n        nodes { ... on LabeledEvent { createdAt actor { login } label { name } } }\n      }\n    }\n  }\n}\n'''\nLIST_QUERY = '''\nquery($o: String!, $n: String!, $l: String!) {\n  repository(owner: $o, name: $n) {\n    issues(first: 100, states: [OPEN], labels: [$l], orderBy: { field: CREATED_AT, direction: ASC }) {\n      nodes { number labels(first: 50) { nodes { name } } }\n    }\n  }\n}\n'''\ndef approved(number):\n    # The approval check itself. Raises Refused unless every condition holds.\n    issue = graphql(ISSUE_QUERY, i=number)['issue']\n    if issue is None:\n        raise Refused('issue not found (pull requests are not accepted)')\n    if issue['state'] != 'OPEN':\n        raise Refused('issue is not open')\n    if LABEL not in [l['name'] for l in issue['labels']['nodes']]:\n        raise Refused('issue does not carry the label ' + LABEL)\n    events = [e for e in issue['timelineItems']['nodes'] if e and e['label']['name'] == LABEL]\n    if not events:\n        raise Refused('no labelling event found for ' + LABEL)\n    last = events[-1]\n    actor = ((last.get('actor') or dict()).get('login') or '').lower()\n    if actor not in MAINTAINERS:\n        raise Refused('label was applied by ' + (actor or 'unknown') + ', who is not a listed maintainer')\n    edited = issue.get('lastEditedAt')\n    if edited and edited > last['createdAt']:\n        raise Refused('issue text was edited after approval; a maintainer must re-apply the label')\n    return issue, actor, last['createdAt']\ndef claim(number, labels):\n    # Mark the issue as being built. While it carries this label no run\n    # started without a number picks another issue: one build at a time.\n    base = 'https://api.github.com/repos/' + REPO_OWNER + '/' + REPO_NAME + '/issues/' + str(number) + '/labels'\n    send(base, dict(labels=[CLAIM]))\n    for old in (BUILT, FAILED):\n        if old in labels:\n            try:\n                req = urllib.request.Request(base + '/' + urllib.parse.quote(old), method='DELETE',\n                    headers=dict(Authorization='Bearer ' + token, Accept='application/json'))\n                urllib.request.urlopen(req, timeout=30).read()\n            except Exception:\n                pass\nif NUMBER > 0:\n    # A specific issue was asked for (-I issue=<number>, or construct-build).\n    try:\n        issue, actor, when = approved(NUMBER)\n    except Refused as exc:\n        refuse(str(exc))\n    try:\n        claim(NUMBER, [l['name'] for l in issue['labels']['nodes']])\n    except Exception as exc:\n        print('warning: could not add the label ' + CLAIM + ' (' + type(exc).__name__ + ')')\nelse:\n    # No issue given (an automation run): take the oldest open, approved issue\n    # that no run has handled yet. Every candidate still has to pass the full\n    # approval check; one that fails is skipped, not built.\n    # One build at a time: nothing is picked while another issue is being built.\n    busy = [n['number'] for n in graphql(LIST_QUERY, l=CLAIM)['issues']['nodes']]\n    if busy:\n        print('WAITING: issue ' + str(busy[0]) + ' is still being built (label ' + CLAIM + '). One issue is built at a time.')\n        print('If no run is working on it any more, remove that label from the issue.')\n        sys.exit(1)\n    issue = None\n    candidates = graphql(LIST_QUERY, l=LABEL)['issues']['nodes']\n    for node in candidates:\n        number = node['number']\n        handled = [l['name'] for l in node['labels']['nodes'] if l['name'] in (BUILT, FAILED)]\n        if handled:\n            print('skipped issue', number, '- already handled (label ' + handled[0] + ')')\n            continue\n        try:\n            issue, actor, when = approved(number)\n        except Refused as exc:\n            print('skipped issue', number, '-', exc)\n            continue\n        NUMBER = number\n        break\n    if issue is None:\n        print('NOTHING TO BUILD: no open issue labelled ' + LABEL + ' is waiting (' + str(len(candidates)) + ' checked).')\n        print('To build an issue again, remove its ' + BUILT + ' or ' + FAILED + ' label.')\n        sys.exit(1)\n    try:\n        claim(NUMBER, [])\n    except Exception as exc:\n        refuse('could not add the label ' + CLAIM + ' to issue ' + str(NUMBER) + ' (' + type(exc).__name__ + '); not building it, because the next run would pick it again')\nos.makedirs('/tmp/fabro', exist_ok=True)\nwith open('/tmp/fabro/issue.md', 'w') as f:\n    f.write('# ' + issue['title'] + chr(10) + chr(10) + (issue['body'] or '') + chr(10))\nwith open('/tmp/fabro/issue_number', 'w') as f:\n    f.write(str(NUMBER))\nprint('APPROVED: issue', NUMBER, 'released by', actor, 'at', when)\nprint('title:', issue['title'])",
+            "usage": null,
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 0,
+              "tool_time_ms": 3756,
+              "active_time_ms": 3756
             }
           },
           "release": {
@@ -4031,24 +4013,6 @@
               "human.gate.approve.question": "Approve the spec? To have it revised, type what should change.",
               "human.gate.approve.label": "[A] Approve"
             },
-            "usage": null
-          },
-          "review_gate": {
-            "status": "succeeded",
-            "context_updates": {
-              "command.output": "blob://sha256/59636a9c1d79fcf83ed69d7f7f4148bb51e472cc789ea6fc3b508539625f4ecb"
-            },
-            "notes": "Script completed: \nimport json, os, shutil, subprocess, sys\nD = '/tmp/fabro'\nNL = chr(10)\nMAX_ROUNDS = int('3')\ndef run(cmd, env=None):\n    p = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors='replace', env=env)\n    return p.returncode, p.stdout\ndef read(path):\n    try:\n        with open(path) as f:\n            return f.read()\n    except OSError:\n        return ''\ndef write(path, text):\n    with open(path, 'w') as f:\n        f.write(text)\ndef remove(*names):\n    for name in names:\n        if os.path.exists(D + '/' + name):\n            os.remove(D + '/' + name)\ndef snapshot():\n    # Same as in the verify step: the working tree as a git tree object.\n    index = D + '/index'\n    rc, source = run('git rev-parse --git-path index')\n    try:\n        shutil.copyfile(source.strip(), index)\n    except OSError:\n        if os.path.exists(index):\n            os.remove(index)\n    rc, out = run('git add -A . && git write-tree', dict(os.environ, GIT_INDEX_FILE=index))\n    last = (out.strip().splitlines() or [''])[-1].strip()\n    return last if rc == 0 else ''\ndef stop(route, message):\n    print(route)\n    print(message.replace('ROUTE_', 'ROUTE-')[:3000])\n    sys.exit(1)\ndef render(items):\n    rows = []\n    for i, f in enumerate(items, 1):\n        rows.append(str(i) + '. [' + str(f.get('category', 'general')) + '] ' + str(f.get('file', '?')) + ':' + str(f.get('line', '?'))\n            + NL + '   Problem: ' + str(f.get('problem', '')) + NL + '   Required fix: ' + str(f.get('fix', '')))\n    return NL.join(rows)\ntier = read(D + '/review_tier').strip() or 'security'\nTREE = snapshot()\nif not TREE or TREE != read(D + '/review_tree').strip():\n    stop('ROUTE_reverify', 'The repository changed during review. Reviewers must not edit files. Running verification again.')\nverdict, summary, findings, problem, wants_security = '', '', [], '', False\ntry:\n    with open(D + '/review.json') as f:\n        data = json.load(f)\n    verdict = str(data.get('verdict', '')).strip().lower()\n    summary = str(data.get('summary', ''))\n    findings = [x for x in (data.get('findings') or []) if isinstance(x, dict)]\n    wants_security = str(data.get('needs_security_review', '')).strip().lower() == 'true'\nexcept Exception as exc:\n    problem = 'no readable verdict in /tmp/fabro/review.json (' + type(exc).__name__ + ')'\nremove('review.json')\nblocking = [x for x in findings if str(x.get('severity', '')).strip().lower() == 'blocking']\nnotes = [x for x in findings if x not in blocking]\nif not problem and verdict not in ('pass', 'fail'):\n    problem = 'unknown verdict: ' + verdict[:40]\nif not problem and verdict == 'pass' and blocking:\n    verdict = 'fail'\nif not problem and verdict == 'fail' and not blocking:\n    problem = 'verdict is fail but no blocking finding was given'\nhand_over = tier == 'standard' and (wants_security or bool(problem))\nif hand_over:\n    # From now on this change is reviewed by the security reviewer.\n    write(D + '/force_security', '1')\n    write(D + '/review_tier', 'security')\nif problem:\n    if hand_over:\n        stop('ROUTE_security', 'Handing over to the security reviewer: ' + problem)\n    stop('ROUTE_human', 'The security reviewer did not reach a usable verdict: ' + problem)\nif verdict == 'pass' and hand_over:\n    with open(D + '/review-brief.md', 'a') as f:\n        f.write(NL + 'The standard reviewer found nothing blocking and asked for a security review: ' + summary[:1500] + NL)\n    stop('ROUTE_security', 'The standard reviewer asked for a security review: ' + summary)\nif verdict == 'pass':\n    text = '# Review passed (' + tier + ' reviewer)' + NL + NL + summary + NL\n    if notes:\n        text += NL + '## Non-blocking notes' + NL + render(notes) + NL\n    write(D + '/review-notes.md', text)\n    remove('todo.md', 'last-review.md', 'fix-notes.md')\n    print('REVIEW PASSED (' + tier + ' reviewer), ' + str(len(notes)) + ' non-blocking note(s)')\n    print(summary[:1500])\n    sys.exit(0)\ntry:\n    rounds = int(read(D + '/review_rounds').strip() or 0) + 1\nexcept ValueError:\n    rounds = MAX_ROUNDS\nwrite(D + '/review_rounds', str(rounds))\nbody = summary + NL + NL + '## Blocking findings - every one must be fixed' + NL + render(blocking) + NL\nwrite(D + '/last-review.md', '# Review rejected the change (round ' + str(rounds) + ', ' + tier + ' reviewer)' + NL + NL + body)\nwrite(D + '/todo.md', '# Fix this: an independent reviewer rejected the change (round ' + str(rounds) + ')' + NL + NL + body\n    + NL + 'The spec is /tmp/fabro/spec.md. The complete change as reviewed is /tmp/fabro/change.diff.' + NL)\nwrite(D + '/reviewed_tree', TREE)\nremove('fix-notes.md')\nspec_fault = any(str(x.get('category', '')).strip().lower() == 'spec' for x in blocking)\nif rounds >= MAX_ROUNDS:\n    route = 'ROUTE_human'\nelif spec_fault:\n    route = 'ROUTE_human (a finding says the spec itself is wrong)'\nelif rounds == 1:\n    route = 'ROUTE_implement'\nelse:\n    route = 'ROUTE_deep'\nstop(route, 'REVIEW REJECTED, round ' + str(rounds) + ' of ' + str(MAX_ROUNDS) + ', ' + str(len(blocking)) + ' blocking finding(s):' + NL + render(blocking))",
-            "usage": null,
-            "timing": {
-              "wall_time_ms": 0,
-              "inference_time_ms": 0,
-              "tool_time_ms": 690,
-              "active_time_ms": 690
-            }
-          },
-          "start": {
-            "status": "succeeded",
             "usage": null
           },
           "install": {
@@ -4118,27 +4082,220 @@
               "tool_time_ms": 9569,
               "active_time_ms": 126073
             }
+          },
+          "implement": {
+            "status": "succeeded",
+            "context_updates": {
+              "last_stage": "implement",
+              "last_response": "Implemented the two reviewer-requested fixes in `serve_http.py` and added regression tests.\n\nWhat I changed\n- Added a `/ingest` media-type guard:\n  - `POST /ingest` now requires `Content-Type: applica",
+              "response.implement": "Implemented the two reviewer-requested fixes in `serve_http.py` and added regression tests.\n\nWhat I changed\n- Added a `/ingest` media-type guard:\n  - `POST /ingest` now requires `Content-Type: application/json`\n  - Parameters like `; charset=utf-8` are accepted\n  - Missing or non-JSON media types return `415` before any body parsing, file writes, or rebuilds\n- Fixed ingest note path resolution:\n  - `note_path_for_id()` now appends `.md` to the validated id segment instead of replacing an existing suffix\n  - Example: `releases/v1.2` now writes to `vault/releases/v1.2.md`\n- Added duplicate target detection during validation:\n  - `validate_notes()` now tracks resolved destination paths and rejects duplicate targets before any writes\n\nTest coverage for the todo items\n- Todo 1: browser-simple-request / CSRF-style media-type issue\n  - Covered by `tests/test_http_service.py::test_ingest_requires_application_json_and_avoids_writes_or_rebuild`\n- Todo 2: dotted ids and duplicate resolved targets\n  - Covered by `tests/test_http_service.py::test_ingest_accepts_dotted_ids_and_rejects_duplicate_targets`\n\nWhat I ran\n- `python3 -m pytest -q tests/test_http_service.py -k 'requires_application_json or dotted_ids'`\n- `python3 -m pytest -q tests/test_http_service.py`\n- `python3 -m pytest -q`\n\nObserved results\n- Focused regression tests: passed\n- Full HTTP service test file: passed\n- Full test suite: passed\n\nNoticed, not touched\n- None\n\nSTATUS: DONE"
+            },
+            "notes": "Stage completed: implement",
+            "usage": {
+              "input": {
+                "usage": {
+                  "model": {
+                    "provider": "openai",
+                    "model_id": "gpt-5.4"
+                  },
+                  "tokens": {
+                    "input_tokens": 33278,
+                    "output_tokens": 3087,
+                    "reasoning_tokens": 2738,
+                    "cache_read_tokens": 207872,
+                    "cache_write_tokens": 0
+                  }
+                },
+                "facts": {
+                  "algorithm": "openai"
+                }
+              },
+              "total_usd_micros": 222538
+            },
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 91502,
+              "tool_time_ms": 29371,
+              "active_time_ms": 120873
+            }
           }
         },
         "next_node_id": "exit",
+        "git_commit_sha": "484928ec3ec2c5ad826f9be6c04f56e4446a8d3d",
+        "loop_failure_signatures": {
+          "review_gate|deterministic|script failed with exit code: <n> ## output route_implement review rejected,round <n> of <n>,<n> blocking finding(s): <n>. [authorization] serve_http.py:<n> problem: post /ingest parses the request body as json without requiring an applicat": 1
+        },
         "node_visits": {
-          "release": 1,
           "approve": 1,
-          "spec": 1,
-          "security_review": 2,
-          "start": 1,
-          "implement": 2,
-          "verify": 2,
-          "save_spec": 1,
           "review_gate": 2,
+          "save_spec": 1,
+          "install": 1,
           "check_issue": 1,
-          "install": 1
+          "release": 1,
+          "spec": 1,
+          "start": 1,
+          "verify": 2,
+          "implement": 2,
+          "security_review": 2
         }
       },
-      "diff": {}
+      "diff": {
+        "summary": {
+          "files_changed": 8,
+          "additions": 936,
+          "deletions": 8
+        }
+      }
     }
   ],
-  "conclusion": null,
+  "conclusion": {
+    "timestamp": "2026-11-26T16:10:32.134301829Z",
+    "status": "succeeded",
+    "timing": {
+      "wall_time_ms": 1798692,
+      "inference_time_ms": 817689,
+      "tool_time_ms": 129677,
+      "active_time_ms": 947366
+    },
+    "final_git_commit_sha": "484928ec3ec2c5ad826f9be6c04f56e4446a8d3d",
+    "stages": [
+      {
+        "stage_id": "start",
+        "stage_label": "start",
+        "timing": {
+          "wall_time_ms": 0,
+          "inference_time_ms": 0,
+          "tool_time_ms": 0,
+          "active_time_ms": 0
+        },
+        "retries": 0
+      },
+      {
+        "stage_id": "check_issue",
+        "stage_label": "check_issue",
+        "timing": {
+          "wall_time_ms": 3770,
+          "inference_time_ms": 0,
+          "tool_time_ms": 3756,
+          "active_time_ms": 3756
+        },
+        "retries": 0
+      },
+      {
+        "stage_id": "install",
+        "stage_label": "install",
+        "timing": {
+          "wall_time_ms": 5468,
+          "inference_time_ms": 0,
+          "tool_time_ms": 5449,
+          "active_time_ms": 5449
+        },
+        "retries": 0
+      },
+      {
+        "stage_id": "spec",
+        "stage_label": "spec",
+        "timing": {
+          "wall_time_ms": 155332,
+          "inference_time_ms": 151897,
+          "tool_time_ms": 2699,
+          "active_time_ms": 154596
+        },
+        "billing_usd_micros": 763424,
+        "retries": 0
+      },
+      {
+        "stage_id": "save_spec",
+        "stage_label": "save_spec",
+        "timing": {
+          "wall_time_ms": 427,
+          "inference_time_ms": 0,
+          "tool_time_ms": 407,
+          "active_time_ms": 407
+        },
+        "retries": 0
+      },
+      {
+        "stage_id": "approve",
+        "stage_label": "approve",
+        "timing": {
+          "wall_time_ms": 777823,
+          "inference_time_ms": 0,
+          "tool_time_ms": 0,
+          "active_time_ms": 0
+        },
+        "retries": 0
+      },
+      {
+        "stage_id": "implement",
+        "stage_label": "implement",
+        "timing": {
+          "wall_time_ms": 470460,
+          "inference_time_ms": 392823,
+          "tool_time_ms": 75884,
+          "active_time_ms": 468707
+        },
+        "billing_usd_micros": 940179,
+        "retries": 0
+      },
+      {
+        "stage_id": "verify",
+        "stage_label": "verify",
+        "timing": {
+          "wall_time_ms": 22911,
+          "inference_time_ms": 0,
+          "tool_time_ms": 22846,
+          "active_time_ms": 22846
+        },
+        "retries": 0
+      },
+      {
+        "stage_id": "security_review",
+        "stage_label": "security_review",
+        "timing": {
+          "wall_time_ms": 289862,
+          "inference_time_ms": 272969,
+          "tool_time_ms": 14442,
+          "active_time_ms": 287411
+        },
+        "billing_usd_micros": 1745291,
+        "retries": 0
+      },
+      {
+        "stage_id": "review_gate",
+        "stage_label": "review_gate",
+        "timing": {
+          "wall_time_ms": 1305,
+          "inference_time_ms": 0,
+          "tool_time_ms": 1253,
+          "active_time_ms": 1253
+        },
+        "retries": 0
+      },
+      {
+        "stage_id": "release",
+        "stage_label": "release",
+        "timing": {
+          "wall_time_ms": 2970,
+          "inference_time_ms": 0,
+          "tool_time_ms": 2941,
+          "active_time_ms": 2941
+        },
+        "retries": 0
+      }
+    ],
+    "billing": {
+      "input_tokens": 259082,
+      "output_tokens": 32564,
+      "total_tokens": 2828058,
+      "reasoning_tokens": 28764,
+      "cache_read_tokens": 2507648,
+      "cache_write_tokens": 0,
+      "total_usd_micros": 3448894
+    },
+    "total_retries": 0,
+    "diff": {}
+  },
   "sandbox": {
     "kind": "ready",
     "plan": {
@@ -4165,6 +4322,40 @@
   "superseded_by": null,
   "pending_interviews": {},
   "stages": {
+    "exit@1": {
+      "first_event_seq": 580,
+      "prompt": null,
+      "response": null,
+      "completion": {
+        "outcome": "succeeded",
+        "notes": null,
+        "failure_reason": null,
+        "timestamp": "2026-11-26T16:10:31.994737461Z"
+      },
+      "provider_used": null,
+      "diff": null,
+      "script_invocation": null,
+      "script_timing": null,
+      "parallel_results": null,
+      "output": null,
+      "started_at": "2026-11-26T16:10:31.994707829Z",
+      "handler": "exit",
+      "timing": {
+        "wall_time_ms": 0,
+        "inference_time_ms": 0,
+        "tool_time_ms": 0,
+        "active_time_ms": 0
+      },
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "reasoning_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "state": "succeeded"
+    },
     "approve@1": {
       "first_event_seq": 141,
       "prompt": null,
@@ -5681,7 +5872,12 @@
       "first_event_seq": 570,
       "prompt": null,
       "response": null,
-      "completion": null,
+      "completion": {
+        "outcome": "succeeded",
+        "notes": "Script completed: \nimport json, os, urllib.parse, urllib.request\nREPO_OWNER, REPO_NAME = '0x0pointer', 'Source'\nCLAIM = 'fabro-in-progress'\nBUILT = 'fabro-built'\nFAILED = 'fabro-failed'\nD = '/tmp/fabro'\ntoken = os.environ.get('GITHUB_TOKEN') or ''\ntry:\n    with open(D + '/issue_number') as f:\n        number = int(f.read().strip())\nexcept Exception:\n    number = 0\n# The review gate leaves review-notes.md behind only when the change passed,\n# and todo.md only while something is still to be fixed.\npassed = os.path.exists(D + '/review-notes.md') and not os.path.exists(D + '/todo.md')\noutcome = BUILT if passed else FAILED\ndef call(method, path, body=None):\n    req = urllib.request.Request('https://api.github.com/repos/' + REPO_OWNER + '/' + REPO_NAME + '/issues/' + str(number) + path,\n        data=json.dumps(body).encode() if body is not None else None, method=method,\n        headers=dict(Authorization='Bearer ' + token, Accept='application/json'))\n    urllib.request.urlopen(req, timeout=30).read()\nif number <= 0:\n    print('no issue was picked in this run, nothing to release')\nelse:\n    for step, args in (('add ' + outcome, ('POST', '/labels', dict(labels=[outcome]))),\n                       ('remove ' + CLAIM, ('DELETE', '/labels/' + urllib.parse.quote(CLAIM)))):\n        try:\n            call(*args)\n        except Exception as exc:\n            print('warning: could not ' + step + ' on issue ' + str(number) + ' (' + type(exc).__name__ + ')')\n    print('RELEASED: issue', number, 'is now labelled', outcome)",
+        "failure_reason": null,
+        "timestamp": "2026-11-26T16:10:27.495116442Z"
+      },
       "provider_used": null,
       "diff": null,
       "script_invocation": {
@@ -5690,11 +5886,27 @@
         "language": "python",
         "timeout_ms": 120000
       },
-      "script_timing": null,
+      "script_timing": {
+        "output": "blob://sha256/264be39c95483d3b9a483d4099d05d1dc07bebf6c7654d44139e1b8952da915d",
+        "exit_code": 0,
+        "duration_ms": 2941,
+        "termination": "exited",
+        "output_bytes": 46,
+        "live_streaming": true
+      },
       "parallel_results": null,
       "output": null,
+      "output_bytes": 46,
+      "live_streaming": true,
+      "termination": "exited",
       "started_at": "2026-11-26T16:10:24.525038013Z",
       "handler": "command",
+      "timing": {
+        "wall_time_ms": 2970,
+        "inference_time_ms": 0,
+        "tool_time_ms": 2941,
+        "active_time_ms": 2941
+      },
       "usage": {
         "input_tokens": 0,
         "output_tokens": 0,
@@ -5703,7 +5915,7 @@
         "cache_read_tokens": 0,
         "cache_write_tokens": 0
       },
-      "state": "running"
+      "state": "succeeded"
     }
   }
 }
