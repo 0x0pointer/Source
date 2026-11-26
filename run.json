@@ -960,7 +960,7 @@
     "kind": "running"
   },
   "status_updated_at": "2026-11-26T15:40:33.317679734Z",
-  "last_event_at": "2026-11-26T15:40:49.529481833Z",
+  "last_event_at": "2026-11-26T15:43:29.834784215Z",
   "pending_control": null,
   "checkpoints": [
     {
@@ -1068,9 +1068,9 @@
       }
     },
     {
-      "seq": 0,
+      "seq": 39,
       "checkpoint": {
-        "timestamp": "2026-11-26T15:40:49.539957206Z",
+        "timestamp": "2026-11-26T15:40:54.513860763Z",
         "current_node": "install",
         "completed_nodes": [
           "start",
@@ -1079,28 +1079,156 @@
         ],
         "node_retries": {},
         "context_values": {
+          "failure_signature": "",
+          "outcome": "succeeded",
+          "internal.run_id": "01M8C87T65E2JN1VPVQHFA38KS",
+          "internal.work_dir": "/workspace/Source",
+          "current_node": "install",
+          "thread.check_issue.current_node": "install",
+          "graph.rankdir": "LR",
+          "internal.node_visit_count": 1,
+          "graph.goal": "Resolve the next maintainer-approved GitHub issue of 0x0pointer/Source with a reviewed spec, code, and passing tests",
+          "internal.retry_count.install": 0,
+          "command.output": "blob://sha256/12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
           "failure_class": "",
+          "graph.model_stylesheet": "\n            *       { model: gpt-5.4; reasoning_effort: medium; }\n            .strong { model: gpt-5.5; reasoning_effort: high; }\n        ",
+          "internal.retry_count.check_issue": 0,
+          "internal.fidelity": "compact",
+          "graph.loop_restart_signature_limit": "10",
+          "graph.max_node_visits": "30",
+          "internal.retry_count.start": 0,
+          "internal.thread_id": "check_issue",
+          "thread.start.current_node": "check_issue"
+        },
+        "node_outcomes": {
+          "install": {
+            "status": "succeeded",
+            "context_updates": {
+              "command.output": "blob://sha256/12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126"
+            },
+            "notes": "Script completed: pip install -q numpy pytest pypdf mcp",
+            "usage": null,
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 0,
+              "tool_time_ms": 5449,
+              "active_time_ms": 5449
+            }
+          },
+          "check_issue": {
+            "status": "succeeded",
+            "context_updates": {
+              "command.output": "blob://sha256/cc6d99ab2afbbbbd25e592ac7b31f1aed8a6325eb204576f7535f36fc69586b2"
+            },
+            "notes": "Script completed: \nimport json, os, sys, urllib.parse, urllib.request\nREPO_OWNER, REPO_NAME = '0x0pointer', 'Source'\nRAW_NUMBER = '0'.strip()\nLABEL = 'fabro-approved'\nCLAIM = 'fabro-in-progress'\nBUILT = 'fabro-built'\nFAILED = 'fabro-failed'\nMAINTAINERS = set(m.strip().lower() for m in 'RiieCco,blabla1337,JorgeCarvalhoPT'.split(',') if m.strip())\nclass Refused(Exception):\n    pass\ndef refuse(msg):\n    print('REFUSED: ' + msg)\n    sys.exit(1)\ntoken = os.environ.get('GITHUB_TOKEN')\nif not token:\n    refuse('no GITHUB_TOKEN in the sandbox, cannot verify approval')\nif not RAW_NUMBER.isdigit():\n    refuse('issue must be a number; 0 picks the oldest approved issue')\nNUMBER = int(RAW_NUMBER)\ndef send(url, body):\n    req = urllib.request.Request(url, data=json.dumps(body).encode(),\n        headers=dict(Authorization='Bearer ' + token, Accept='application/json'))\n    return json.load(urllib.request.urlopen(req, timeout=30))\ndef graphql(query, **variables):\n    reply = send('https://api.github.com/graphql',\n        dict(query=query, variables=dict(variables, o=REPO_OWNER, n=REPO_NAME)))\n    if reply.get('errors'):\n        refuse('GitHub API error: ' + json.dumps(reply['errors'])[:300])\n    return reply['data']['repository']\nISSUE_QUERY = '''\nquery($o: String!, $n: String!, $i: Int!) {\n  repository(owner: $o, name: $n) {\n    issue(number: $i) {\n      title\n      body\n      state\n      lastEditedAt\n      author { login }\n      labels(first: 50) { nodes { name } }\n      timelineItems(itemTypes: [LABELED_EVENT], last: 100) {\n        nodes { ... on LabeledEvent { createdAt actor { login } label { name } } }\n      }\n    }\n  }\n}\n'''\nLIST_QUERY = '''\nquery($o: String!, $n: String!, $l: String!) {\n  repository(owner: $o, name: $n) {\n    issues(first: 100, states: [OPEN], labels: [$l], orderBy: { field: CREATED_AT, direction: ASC }) {\n      nodes { number labels(first: 50) { nodes { name } } }\n    }\n  }\n}\n'''\ndef approved(number):\n    # The approval check itself. Raises Refused unless every condition holds.\n    issue = graphql(ISSUE_QUERY, i=number)['issue']\n    if issue is None:\n        raise Refused('issue not found (pull requests are not accepted)')\n    if issue['state'] != 'OPEN':\n        raise Refused('issue is not open')\n    if LABEL not in [l['name'] for l in issue['labels']['nodes']]:\n        raise Refused('issue does not carry the label ' + LABEL)\n    events = [e for e in issue['timelineItems']['nodes'] if e and e['label']['name'] == LABEL]\n    if not events:\n        raise Refused('no labelling event found for ' + LABEL)\n    last = events[-1]\n    actor = ((last.get('actor') or dict()).get('login') or '').lower()\n    if actor not in MAINTAINERS:\n        raise Refused('label was applied by ' + (actor or 'unknown') + ', who is not a listed maintainer')\n    edited = issue.get('lastEditedAt')\n    if edited and edited > last['createdAt']:\n        raise Refused('issue text was edited after approval; a maintainer must re-apply the label')\n    return issue, actor, last['createdAt']\ndef claim(number, labels):\n    # Mark the issue as being built. While it carries this label no run\n    # started without a number picks another issue: one build at a time.\n    base = 'https://api.github.com/repos/' + REPO_OWNER + '/' + REPO_NAME + '/issues/' + str(number) + '/labels'\n    send(base, dict(labels=[CLAIM]))\n    for old in (BUILT, FAILED):\n        if old in labels:\n            try:\n                req = urllib.request.Request(base + '/' + urllib.parse.quote(old), method='DELETE',\n                    headers=dict(Authorization='Bearer ' + token, Accept='application/json'))\n                urllib.request.urlopen(req, timeout=30).read()\n            except Exception:\n                pass\nif NUMBER > 0:\n    # A specific issue was asked for (-I issue=<number>, or construct-build).\n    try:\n        issue, actor, when = approved(NUMBER)\n    except Refused as exc:\n        refuse(str(exc))\n    try:\n        claim(NUMBER, [l['name'] for l in issue['labels']['nodes']])\n    except Exception as exc:\n        print('warning: could not add the label ' + CLAIM + ' (' + type(exc).__name__ + ')')\nelse:\n    # No issue given (an automation run): take the oldest open, approved issue\n    # that no run has handled yet. Every candidate still has to pass the full\n    # approval check; one that fails is skipped, not built.\n    # One build at a time: nothing is picked while another issue is being built.\n    busy = [n['number'] for n in graphql(LIST_QUERY, l=CLAIM)['issues']['nodes']]\n    if busy:\n        print('WAITING: issue ' + str(busy[0]) + ' is still being built (label ' + CLAIM + '). One issue is built at a time.')\n        print('If no run is working on it any more, remove that label from the issue.')\n        sys.exit(1)\n    issue = None\n    candidates = graphql(LIST_QUERY, l=LABEL)['issues']['nodes']\n    for node in candidates:\n        number = node['number']\n        handled = [l['name'] for l in node['labels']['nodes'] if l['name'] in (BUILT, FAILED)]\n        if handled:\n            print('skipped issue', number, '- already handled (label ' + handled[0] + ')')\n            continue\n        try:\n            issue, actor, when = approved(number)\n        except Refused as exc:\n            print('skipped issue', number, '-', exc)\n            continue\n        NUMBER = number\n        break\n    if issue is None:\n        print('NOTHING TO BUILD: no open issue labelled ' + LABEL + ' is waiting (' + str(len(candidates)) + ' checked).')\n        print('To build an issue again, remove its ' + BUILT + ' or ' + FAILED + ' label.')\n        sys.exit(1)\n    try:\n        claim(NUMBER, [])\n    except Exception as exc:\n        refuse('could not add the label ' + CLAIM + ' to issue ' + str(NUMBER) + ' (' + type(exc).__name__ + '); not building it, because the next run would pick it again')\nos.makedirs('/tmp/fabro', exist_ok=True)\nwith open('/tmp/fabro/issue.md', 'w') as f:\n    f.write('# ' + issue['title'] + chr(10) + chr(10) + (issue['body'] or '') + chr(10))\nwith open('/tmp/fabro/issue_number', 'w') as f:\n    f.write(str(NUMBER))\nprint('APPROVED: issue', NUMBER, 'released by', actor, 'at', when)\nprint('title:', issue['title'])",
+            "usage": null,
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 0,
+              "tool_time_ms": 3756,
+              "active_time_ms": 3756
+            }
+          },
+          "start": {
+            "status": "succeeded",
+            "usage": null
+          }
+        },
+        "next_node_id": "spec",
+        "git_commit_sha": "8fa8e4fe1ffe108978cf1c03b4d986150e3e42f9",
+        "node_visits": {
+          "check_issue": 1,
+          "start": 1,
+          "install": 1
+        }
+      },
+      "diff": {
+        "summary": {
+          "files_changed": 0,
+          "additions": 0,
+          "deletions": 0
+        }
+      }
+    },
+    {
+      "seq": 0,
+      "checkpoint": {
+        "timestamp": "2026-11-26T15:43:29.877935018Z",
+        "current_node": "spec",
+        "completed_nodes": [
+          "start",
+          "check_issue",
+          "install",
+          "spec"
+        ],
+        "node_retries": {},
+        "context_values": {
+          "last_response": "DECISION NEEDED: `/search` could be MCP text, structured JSON, or both; choose structured JSON plus a `display` string from the same formatter as MCP, preserving compact rendering while making HTTP pa",
+          "response.spec": "DECISION NEEDED: `/search` could be MCP text, structured JSON, or both; choose structured JSON plus a `display` string from the same formatter as MCP, preserving compact rendering while making HTTP parseable.\n\n1. Intent\nAdd a stdlib-only localhost HTTP service for one Source `{vault, db}` instance. It must search/list an already built index, ingest mechanical-memory notes as Markdown, refresh the existing incremental SQLite index, and reload it. Add `INSTANCE` identity, default `source`, for service self-reporting without breaking existing CLI/MCP defaults.\n\n2. Acceptance criteria\n1. `INSTANCE` unset keeps existing `source` behavior; `INSTANCE=eng-a` makes `GET /health` return `instance: \"eng-a\"`.\n2. `serve_http.py --vault V --db D --port P` and `run_instance.sh NAME --vault V --db D --port P` serve only on `127.0.0.1:P` and use that vault/db.\n3. `GET /search?q=...&k=&mode=&path=&tags=` returns `200 application/json` with `results` entries containing rank/path/heading/score/text/tags/display and top-level `display`; display text matches MCP `path › heading` snippets, and no hits returns `results: []`, `display: \"no matches\"`.\n4. `GET /list` returns indexed notes plus metadata; `GET /health` returns readiness, instance, vault, db, and metadata when present.\n5. `POST /ingest` `{notes:[{id,title,tags,text}]}` writes valid notes to `vault/<id>.md`, creates id subdirectories, calls incremental `source_rag.build(...)`, reloads the index, and makes notes searchable/listed.\n6. Reposting the same `id` overwrites one file/index entry; two services with different vault/db/ports remain isolated.\n7. Existing `build_index.py`, `query.py`, and `mcp_server.py` behavior remains, including incremental reuse, path/tag filtering, and MCP output text.\n8. README documents multi-instance agent-smith usage and endpoint shapes; no new runtime dependency is added.\n\n3. Boundaries\nAlways: use stdlib `http.server`/`json`; use `R.VAULT_ENV`, `R.DB_ENV`, `R.DEFAULT_*`, `R.build`, `R.Index.search`, `R.Index.list_notes`; share search display formatting through `source_rag.py`.\nNever: add HTTP framework/deps, bind beyond localhost, change CI/deployment, remove/limit CLI or MCP, or write/index outside the selected vault.\n\n4. Code map\n- `source_rag.py`: add `INSTANCE_ENV`, `INSTANCE`, `format_search_hits(hits: list[dict]) -> str`; make `MCP_NAME` default to `source` and honor `INSTANCE`. Existing tests: `tests/test_chunking.py` build/search.\n- `mcp_server.py`: replace inline search formatting with `R.format_search_hits(...)` without changing output.\n- `serve_http.py` (new): `main(argv=None)`, localhost `HTTPServer`, JSON helpers, `/health`, `/list`, `/search`, `/ingest`, safe ingest validation/writes, rebuild/reload.\n- `run_instance.sh` (new): parse `<name> --vault <dir> --db <file> --port <n>`, export `INSTANCE`/`SOURCE_VAULT`/`SOURCE_DB`, run `.venv/bin/python serve_http.py ...`.\n- `README.md`: add multi-instance agent-smith section and endpoint examples.\n- `pyproject.toml`: include `serve_http` in `py-modules`; add `source-http` script only if consistent with existing scripts.\n- Tests: add `tests/test_http_service.py`; update `tests/test_chunking.py` for formatter/instance tests.\n\n5. Edge cases\n| Input/state | Expected behaviour |\n|---|---|\n| Missing/blank `/search` `q` | `400` JSON error. |\n| `k` absent, non-integer, outside range | default 3; non-integer `400`; integer clamped to 1..20. |\n| Invalid `mode` | `400`; only `hybrid`, `vector`, `keyword`. |\n| No ready index | health `200` with not-ready; search/list `503`; ingest may create the first index. |\n| Malformed JSON or missing `notes` list | `400`; no writes/rebuild. |\n| Oversized body | `413` before writes. |\n| Empty batch, too many notes, or duplicate ids | `400`; no writes. |\n| Absolute id, `..`, empty segments, backslash, NUL, bad chars | `400`; no write outside vault. |\n| Concurrent requests | Single-threaded serialization; no half-swapped db observed. |\n| Rebuild failure after writes | `500`; previous db/index keeps serving if it existed. |\n\n6. Security considerations\nUnauthenticated local JSON is the new trust boundary. Bind only to `127.0.0.1` and document not to expose it. Validate ids and resolved paths to stop traversal. Use no shell from HTTP; quote paths in `run_instance.sh`. Keep SQL parameterized via existing Index methods. Limit body/batch size to reduce local resource abuse. Do not log note bodies/secrets. No auth is added because scope is offline localhost.\n\n7. Test plan\n- `tests/test_chunking.py::test_instance_defaults_to_source_and_honors_env_on_reload`: default and env override.\n- `tests/test_chunking.py::test_format_search_hits_matches_existing_mcp_shape`: formatted hit text and `no matches`.\n- `tests/test_http_service.py::test_health_and_list_return_instance_and_index_state`: fake index health/list JSON.\n- `tests/test_http_service.py::test_search_endpoint_formats_filters_and_validates_params`: q/k/mode/path/tags passed through, k clamped, display returned, bad params rejected.\n- `tests/test_http_service.py::test_ingest_writes_markdown_rebuilds_reloads_and_searches`: file path/content, incremental build call, reload, search visibility.\n- `tests/test_http_service.py::test_ingest_is_idempotent_upsert_and_isolated_by_vault`: same id overwrites; two temp vaults do not leak results.\n- `tests/test_http_service.py::test_ingest_rejects_malformed_duplicate_traversal_and_oversize_without_writes`: malformed JSON, duplicate ids, traversal ids, 413, no files.\n- `tests/test_http_service.py::test_rebuild_failure_returns_500_and_keeps_old_index`: old search/list still works after simulated build error.\nExisting `tests/test_chunking.py` must keep passing.\nTests required: yes\n\n8. Review focus\n- Accidental MCP rename or output drift.\n- `/search` JSON shape compatibility with agent-smith.\n- Ingest id/tag validation too strict or too loose.\n- SQLite connection leaks or stale index after repeated ingest.\n- Docs overstating safety of an unauthenticated service.\n\n9. Assumptions\n- `id` is a slash-separated relative stem such as `findings/host-1`; service appends `.md`.\n- `title` and `text` are required strings; `tags` is optional simple slug strings.\n- Markdown output is frontmatter `tags: [..]`, `# title`, blank line, then text; no YAML dependency.\n- Request limits are fixed constants in `serve_http.py`.\n\n10. Suspicious content\nnone\n\nSize: standard\nRisk level: medium\nReason: unauthenticated localhost clients can write files into a vault and trigger index rebuilds; bad validation could corrupt data or allow path traversal, though exposure is localhost-only.",
+          "failure_class": "",
+          "last_stage": "spec",
           "command.output": "blob://sha256/12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
           "thread.check_issue.current_node": "install",
+          "thread.strong.current_node": "spec",
           "thread.start.current_node": "check_issue",
+          "internal.retry_count.spec": 0,
           "graph.max_node_visits": "30",
           "internal.work_dir": "/workspace/Source",
           "graph.loop_restart_signature_limit": "10",
           "graph.goal": "Resolve the next maintainer-approved GitHub issue of 0x0pointer/Source with a reviewed spec, code, and passing tests",
           "internal.retry_count.start": 0,
           "internal.fidelity": "compact",
-          "current_node": "install",
+          "current_node": "spec",
           "failure_signature": "",
           "internal.retry_count.check_issue": 0,
           "outcome": "succeeded",
           "internal.retry_count.install": 0,
           "internal.node_visit_count": 1,
-          "internal.thread_id": "check_issue",
+          "internal.thread_id": "strong",
           "graph.rankdir": "LR",
           "graph.model_stylesheet": "\n            *       { model: gpt-5.4; reasoning_effort: medium; }\n            .strong { model: gpt-5.5; reasoning_effort: high; }\n        ",
           "internal.run_id": "01M8C87T65E2JN1VPVQHFA38KS"
         },
         "node_outcomes": {
+          "spec": {
+            "status": "succeeded",
+            "context_updates": {
+              "last_response": "DECISION NEEDED: `/search` could be MCP text, structured JSON, or both; choose structured JSON plus a `display` string from the same formatter as MCP, preserving compact rendering while making HTTP pa",
+              "last_stage": "spec",
+              "response.spec": "DECISION NEEDED: `/search` could be MCP text, structured JSON, or both; choose structured JSON plus a `display` string from the same formatter as MCP, preserving compact rendering while making HTTP parseable.\n\n1. Intent\nAdd a stdlib-only localhost HTTP service for one Source `{vault, db}` instance. It must search/list an already built index, ingest mechanical-memory notes as Markdown, refresh the existing incremental SQLite index, and reload it. Add `INSTANCE` identity, default `source`, for service self-reporting without breaking existing CLI/MCP defaults.\n\n2. Acceptance criteria\n1. `INSTANCE` unset keeps existing `source` behavior; `INSTANCE=eng-a` makes `GET /health` return `instance: \"eng-a\"`.\n2. `serve_http.py --vault V --db D --port P` and `run_instance.sh NAME --vault V --db D --port P` serve only on `127.0.0.1:P` and use that vault/db.\n3. `GET /search?q=...&k=&mode=&path=&tags=` returns `200 application/json` with `results` entries containing rank/path/heading/score/text/tags/display and top-level `display`; display text matches MCP `path › heading` snippets, and no hits returns `results: []`, `display: \"no matches\"`.\n4. `GET /list` returns indexed notes plus metadata; `GET /health` returns readiness, instance, vault, db, and metadata when present.\n5. `POST /ingest` `{notes:[{id,title,tags,text}]}` writes valid notes to `vault/<id>.md`, creates id subdirectories, calls incremental `source_rag.build(...)`, reloads the index, and makes notes searchable/listed.\n6. Reposting the same `id` overwrites one file/index entry; two services with different vault/db/ports remain isolated.\n7. Existing `build_index.py`, `query.py`, and `mcp_server.py` behavior remains, including incremental reuse, path/tag filtering, and MCP output text.\n8. README documents multi-instance agent-smith usage and endpoint shapes; no new runtime dependency is added.\n\n3. Boundaries\nAlways: use stdlib `http.server`/`json`; use `R.VAULT_ENV`, `R.DB_ENV`, `R.DEFAULT_*`, `R.build`, `R.Index.search`, `R.Index.list_notes`; share search display formatting through `source_rag.py`.\nNever: add HTTP framework/deps, bind beyond localhost, change CI/deployment, remove/limit CLI or MCP, or write/index outside the selected vault.\n\n4. Code map\n- `source_rag.py`: add `INSTANCE_ENV`, `INSTANCE`, `format_search_hits(hits: list[dict]) -> str`; make `MCP_NAME` default to `source` and honor `INSTANCE`. Existing tests: `tests/test_chunking.py` build/search.\n- `mcp_server.py`: replace inline search formatting with `R.format_search_hits(...)` without changing output.\n- `serve_http.py` (new): `main(argv=None)`, localhost `HTTPServer`, JSON helpers, `/health`, `/list`, `/search`, `/ingest`, safe ingest validation/writes, rebuild/reload.\n- `run_instance.sh` (new): parse `<name> --vault <dir> --db <file> --port <n>`, export `INSTANCE`/`SOURCE_VAULT`/`SOURCE_DB`, run `.venv/bin/python serve_http.py ...`.\n- `README.md`: add multi-instance agent-smith section and endpoint examples.\n- `pyproject.toml`: include `serve_http` in `py-modules`; add `source-http` script only if consistent with existing scripts.\n- Tests: add `tests/test_http_service.py`; update `tests/test_chunking.py` for formatter/instance tests.\n\n5. Edge cases\n| Input/state | Expected behaviour |\n|---|---|\n| Missing/blank `/search` `q` | `400` JSON error. |\n| `k` absent, non-integer, outside range | default 3; non-integer `400`; integer clamped to 1..20. |\n| Invalid `mode` | `400`; only `hybrid`, `vector`, `keyword`. |\n| No ready index | health `200` with not-ready; search/list `503`; ingest may create the first index. |\n| Malformed JSON or missing `notes` list | `400`; no writes/rebuild. |\n| Oversized body | `413` before writes. |\n| Empty batch, too many notes, or duplicate ids | `400`; no writes. |\n| Absolute id, `..`, empty segments, backslash, NUL, bad chars | `400`; no write outside vault. |\n| Concurrent requests | Single-threaded serialization; no half-swapped db observed. |\n| Rebuild failure after writes | `500`; previous db/index keeps serving if it existed. |\n\n6. Security considerations\nUnauthenticated local JSON is the new trust boundary. Bind only to `127.0.0.1` and document not to expose it. Validate ids and resolved paths to stop traversal. Use no shell from HTTP; quote paths in `run_instance.sh`. Keep SQL parameterized via existing Index methods. Limit body/batch size to reduce local resource abuse. Do not log note bodies/secrets. No auth is added because scope is offline localhost.\n\n7. Test plan\n- `tests/test_chunking.py::test_instance_defaults_to_source_and_honors_env_on_reload`: default and env override.\n- `tests/test_chunking.py::test_format_search_hits_matches_existing_mcp_shape`: formatted hit text and `no matches`.\n- `tests/test_http_service.py::test_health_and_list_return_instance_and_index_state`: fake index health/list JSON.\n- `tests/test_http_service.py::test_search_endpoint_formats_filters_and_validates_params`: q/k/mode/path/tags passed through, k clamped, display returned, bad params rejected.\n- `tests/test_http_service.py::test_ingest_writes_markdown_rebuilds_reloads_and_searches`: file path/content, incremental build call, reload, search visibility.\n- `tests/test_http_service.py::test_ingest_is_idempotent_upsert_and_isolated_by_vault`: same id overwrites; two temp vaults do not leak results.\n- `tests/test_http_service.py::test_ingest_rejects_malformed_duplicate_traversal_and_oversize_without_writes`: malformed JSON, duplicate ids, traversal ids, 413, no files.\n- `tests/test_http_service.py::test_rebuild_failure_returns_500_and_keeps_old_index`: old search/list still works after simulated build error.\nExisting `tests/test_chunking.py` must keep passing.\nTests required: yes\n\n8. Review focus\n- Accidental MCP rename or output drift.\n- `/search` JSON shape compatibility with agent-smith.\n- Ingest id/tag validation too strict or too loose.\n- SQLite connection leaks or stale index after repeated ingest.\n- Docs overstating safety of an unauthenticated service.\n\n9. Assumptions\n- `id` is a slash-separated relative stem such as `findings/host-1`; service appends `.md`.\n- `title` and `text` are required strings; `tags` is optional simple slug strings.\n- Markdown output is frontmatter `tags: [..]`, `# title`, blank line, then text; no YAML dependency.\n- Request limits are fixed constants in `serve_http.py`.\n\n10. Suspicious content\nnone\n\nSize: standard\nRisk level: medium\nReason: unauthenticated localhost clients can write files into a vault and trigger index rebuilds; bad validation could corrupt data or allow path traversal, though exposure is localhost-only."
+            },
+            "notes": "Stage completed: spec",
+            "usage": {
+              "input": {
+                "usage": {
+                  "model": {
+                    "provider": "openai",
+                    "model_id": "gpt-5.5"
+                  },
+                  "tokens": {
+                    "input_tokens": 45692,
+                    "output_tokens": 6897,
+                    "reasoning_tokens": 6421,
+                    "cache_read_tokens": 270848,
+                    "cache_write_tokens": 0
+                  }
+                },
+                "facts": {
+                  "algorithm": "openai"
+                }
+              },
+              "total_usd_micros": 763424
+            },
+            "files_touched": [
+              "/tmp/fabro/spec.md"
+            ],
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 151897,
+              "tool_time_ms": 2699,
+              "active_time_ms": 154596
+            }
+          },
           "check_issue": {
             "status": "succeeded",
             "context_updates": {
@@ -1134,9 +1262,10 @@
             }
           }
         },
-        "next_node_id": "spec",
+        "next_node_id": "save_spec",
         "node_visits": {
           "start": 1,
+          "spec": 1,
           "check_issue": 1,
           "install": 1
         }
@@ -1205,6 +1334,280 @@
       },
       "state": "succeeded"
     },
+    "spec@1": {
+      "first_event_seq": 42,
+      "prompt": null,
+      "response": null,
+      "completion": null,
+      "provider_used": {
+        "mode": "agent",
+        "provider": "openai",
+        "model": "gpt-5.5",
+        "reasoning_effort": "high"
+      },
+      "diff": null,
+      "script_invocation": null,
+      "script_timing": null,
+      "parallel_results": null,
+      "output": null,
+      "started_at": "2026-11-26T15:40:54.534323409Z",
+      "handler": "agent",
+      "usage": {
+        "input_tokens": 45692,
+        "output_tokens": 6897,
+        "total_tokens": 329858,
+        "reasoning_tokens": 6421,
+        "cache_read_tokens": 270848,
+        "cache_write_tokens": 0
+      },
+      "model": {
+        "provider": "openai",
+        "model_id": "gpt-5.5-2026-04-23"
+      },
+      "todos": {
+        "kind": "openai_plan",
+        "list_id": "openai_plan:83a80ee5-a5b9-40db-bbc2-2469f4c550ad",
+        "items": [
+          {
+            "id": "d7aea0f2a7fe88db",
+            "status": "completed",
+            "order": 0,
+            "subject": "Read the approved issue and any existing returned spec/feedback context"
+          },
+          {
+            "id": "17c67422214ec515",
+            "status": "completed",
+            "order": 1,
+            "subject": "Inspect repository guidance and relevant code/tests read-only"
+          },
+          {
+            "id": "eab307696d83a809",
+            "status": "completed",
+            "order": 2,
+            "subject": "Draft and write /tmp/fabro/spec.md"
+          },
+          {
+            "id": "3c4685672dda3901",
+            "status": "in_progress",
+            "order": 3,
+            "subject": "Print the final spec only"
+          }
+        ]
+      },
+      "permission_level": "full",
+      "agent_tools": [
+        {
+          "name": "apply_patch",
+          "description": "Use the `apply_patch` tool to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "write",
+          "invoked": false
+        },
+        {
+          "name": "close_agent",
+          "description": "Close a running subagent that is no longer needed.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "subagent",
+          "invoked": false
+        },
+        {
+          "name": "glob",
+          "description": "Find files by file names using a glob pattern. Use path to choose the search root. Prefer this over shell find or ls when locating repository files.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "read",
+          "invoked": true
+        },
+        {
+          "name": "grep",
+          "description": "Search file contents with a regex pattern. Use path to choose the search root, glob_filter to limit matching files, case_insensitive for case folding, and max_results to cap output.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "read",
+          "invoked": false
+        },
+        {
+          "name": "read_file",
+          "description": "Read files before editing them. Returns line-numbered text and supports offset/limit for large files. Use this instead of shell cat, head, tail, or sed when inspecting repository files.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "read",
+          "invoked": true
+        },
+        {
+          "name": "request_user_input",
+          "description": "Ask the human one or more questions and wait for their answers before continuing this stage.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "other",
+          "invoked": false
+        },
+        {
+          "name": "send_input",
+          "description": "Send a follow-up message to a running subagent when new information or corrected instructions are needed.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "subagent",
+          "invoked": false
+        },
+        {
+          "name": "shell",
+          "description": "Execute shell commands for terminal operations, package managers, tests and builds. Use dedicated tools for file reads, file edits, filename searches, and content searches. Provide timeout_ms for long-running commands.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "shell",
+          "invoked": true
+        },
+        {
+          "name": "spawn_agent",
+          "description": "Spawn a subagent for independent work or context isolation. Use it for tasks that can proceed separately, and avoid duplicating the same work in the parent session.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "subagent",
+          "invoked": false
+        },
+        {
+          "name": "update_plan",
+          "description": "Update the multi-step plan for the current task. Submit the entire plan; existing steps are reconciled by exact step text.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "other",
+          "invoked": true
+        },
+        {
+          "name": "wait",
+          "description": "Wait for a subagent to complete, then use the result to synthesize the outcome for the user.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "subagent",
+          "invoked": false
+        },
+        {
+          "name": "web_fetch",
+          "description": "Fetch content from a URL that starts with http:// or https://. Pass a prompt to extract specific information or summarize the page; omit prompt to return the page content.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "other",
+          "invoked": false
+        },
+        {
+          "name": "web_search",
+          "description": "Search the web using Brave Search when current external information is needed. Returns result titles, URLs, and descriptions; use web_fetch for a specific URL.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "other",
+          "invoked": false
+        },
+        {
+          "name": "write_file",
+          "description": "Create new files, or overwrite an existing file only when replacement is explicitly intended. Prefer edit_file for targeted changes to existing files because write_file overwrites the full file content.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "write",
+          "invoked": true
+        }
+      ],
+      "context_window": {
+        "provider": "openai",
+        "model": "gpt-5.5",
+        "context_window_tokens": 272000,
+        "input_tokens": 38540,
+        "usage_percent": 14.169117647058824,
+        "count_method": "response_usage_scaled_breakdown",
+        "staleness": "live",
+        "generated_at": "2026-11-26T15:43:29.830440843Z",
+        "event_seq": 120,
+        "breakdown": [
+          {
+            "category": "system_prompt",
+            "tokens": 699,
+            "usage_percent": 0.25698529411764703
+          },
+          {
+            "category": "tools",
+            "tokens": 1064,
+            "usage_percent": 0.3911764705882353
+          },
+          {
+            "category": "conversation",
+            "tokens": 36772,
+            "usage_percent": 13.519117647058824
+          },
+          {
+            "category": "other",
+            "tokens": 5,
+            "usage_percent": 0.001838235294117647
+          }
+        ],
+        "warnings": []
+      },
+      "state": "running"
+    },
+    "install@1": {
+      "first_event_seq": 32,
+      "prompt": null,
+      "response": null,
+      "completion": {
+        "outcome": "succeeded",
+        "notes": "Script completed: pip install -q numpy pytest pypdf mcp",
+        "failure_reason": null,
+        "timestamp": "2026-11-26T15:40:49.529742522Z"
+      },
+      "provider_used": null,
+      "diff": null,
+      "script_invocation": {
+        "script": "pip install -q numpy pytest pypdf mcp",
+        "command": "exec 2>&1\npip install -q numpy pytest pypdf mcp",
+        "language": "shell",
+        "timeout_ms": 600000
+      },
+      "script_timing": {
+        "output": "blob://sha256/12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+        "exit_code": 0,
+        "duration_ms": 5449,
+        "termination": "exited",
+        "output_bytes": 0,
+        "live_streaming": true
+      },
+      "parallel_results": null,
+      "output": null,
+      "output_bytes": 0,
+      "live_streaming": true,
+      "termination": "exited",
+      "started_at": "2026-11-26T15:40:44.061565520Z",
+      "handler": "command",
+      "timing": {
+        "wall_time_ms": 5468,
+        "inference_time_ms": 0,
+        "tool_time_ms": 5449,
+        "active_time_ms": 5449
+      },
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "reasoning_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "state": "succeeded"
+    },
     "check_issue@1": {
       "first_event_seq": 21,
       "prompt": null,
@@ -1253,44 +1656,6 @@
         "cache_write_tokens": 0
       },
       "state": "succeeded"
-    },
-    "install@1": {
-      "first_event_seq": 32,
-      "prompt": null,
-      "response": null,
-      "completion": null,
-      "provider_used": null,
-      "diff": null,
-      "script_invocation": {
-        "script": "pip install -q numpy pytest pypdf mcp",
-        "command": "exec 2>&1\npip install -q numpy pytest pypdf mcp",
-        "language": "shell",
-        "timeout_ms": 600000
-      },
-      "script_timing": {
-        "output": "blob://sha256/12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
-        "exit_code": 0,
-        "duration_ms": 5449,
-        "termination": "exited",
-        "output_bytes": 0,
-        "live_streaming": true
-      },
-      "parallel_results": null,
-      "output": null,
-      "output_bytes": 0,
-      "live_streaming": true,
-      "termination": "exited",
-      "started_at": "2026-11-26T15:40:44.061565520Z",
-      "handler": "command",
-      "usage": {
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "total_tokens": 0,
-        "reasoning_tokens": 0,
-        "cache_read_tokens": 0,
-        "cache_write_tokens": 0
-      },
-      "state": "running"
     }
   }
 }
