@@ -518,7 +518,7 @@
     "kind": "running"
   },
   "status_updated_at": "2026-11-26T23:56:02.961887062Z",
-  "last_event_at": "2026-11-26T23:56:04.832553352Z",
+  "last_event_at": "2026-11-26T23:56:09.904990031Z",
   "pending_control": null,
   "checkpoints": [
     {
@@ -560,9 +560,9 @@
       "diff": {}
     },
     {
-      "seq": 0,
+      "seq": 29,
       "checkpoint": {
-        "timestamp": "2026-11-26T23:56:06.044096471Z",
+        "timestamp": "2026-11-26T23:56:09.904848865Z",
         "current_node": "pick_pr",
         "completed_nodes": [
           "start",
@@ -570,23 +570,23 @@
         ],
         "node_retries": {},
         "context_values": {
-          "internal.thread_id": "start",
-          "internal.work_dir": "/workspace/Source",
-          "internal.run_id": "01M8D4K5M6KC50JTVK3S3Q84B7",
-          "failure_signature": "pick_pr|deterministic|script failed with exit code: <n> ## output nothing to fix: no pull request with failed checks is waiting (<n> looked at).",
           "internal.retry_count.start": 0,
-          "internal.node_visit_count": 1,
-          "failure_class": "deterministic",
-          "graph.model_stylesheet": "\n            *       { model: gpt-5.4; reasoning_effort: medium; }\n            .strong { model: gpt-5.5; reasoning_effort: high; }\n        ",
-          "command.output": "blob://sha256/f25cf93631c1ea86599f2b5e3ac506f420eabb6a2b85a0a1069b02f1238ee7c4",
-          "graph.max_node_visits": "12",
-          "outcome": "failed",
-          "internal.retry_count.pick_pr": 0,
-          "graph.goal": "Fix the failed CI checks on a Fabro pull request of 0x0pointer/Source and push the fix to the same branch",
           "graph.rankdir": "LR",
-          "internal.fidelity": "compact",
+          "graph.goal": "Fix the failed CI checks on a Fabro pull request of 0x0pointer/Source and push the fix to the same branch",
           "thread.start.current_node": "pick_pr",
-          "current_node": "pick_pr"
+          "failure_signature": "pick_pr|deterministic|script failed with exit code: <n> ## output nothing to fix: no pull request with failed checks is waiting (<n> looked at).",
+          "internal.run_id": "01M8D4K5M6KC50JTVK3S3Q84B7",
+          "internal.retry_count.pick_pr": 0,
+          "command.output": "blob://sha256/f25cf93631c1ea86599f2b5e3ac506f420eabb6a2b85a0a1069b02f1238ee7c4",
+          "internal.thread_id": "start",
+          "current_node": "pick_pr",
+          "failure_class": "deterministic",
+          "graph.max_node_visits": "12",
+          "internal.fidelity": "compact",
+          "graph.model_stylesheet": "\n            *       { model: gpt-5.4; reasoning_effort: medium; }\n            .strong { model: gpt-5.5; reasoning_effort: high; }\n        ",
+          "outcome": "failed",
+          "internal.work_dir": "/workspace/Source",
+          "internal.node_visit_count": 1
         },
         "node_outcomes": {
           "pick_pr": {
@@ -612,15 +612,61 @@
           }
         },
         "next_node_id": "exit",
+        "git_commit_sha": "ed6e7fe27fb6a597b03871d796d44f0bfc6cbe66",
+        "loop_failure_signatures": {
+          "pick_pr|deterministic|script failed with exit code: <n> ## output nothing to fix: no pull request with failed checks is waiting (<n> looked at).": 1
+        },
         "node_visits": {
           "pick_pr": 1,
           "start": 1
         }
       },
-      "diff": {}
+      "diff": {
+        "summary": {
+          "files_changed": 0,
+          "additions": 0,
+          "deletions": 0
+        }
+      }
     }
   ],
-  "conclusion": null,
+  "conclusion": {
+    "timestamp": "2026-11-26T23:56:09.948961978Z",
+    "status": "succeeded",
+    "timing": {
+      "wall_time_ms": 6948,
+      "inference_time_ms": 0,
+      "tool_time_ms": 1187,
+      "active_time_ms": 1187
+    },
+    "final_git_commit_sha": "ed6e7fe27fb6a597b03871d796d44f0bfc6cbe66",
+    "stages": [
+      {
+        "stage_id": "start",
+        "stage_label": "start",
+        "timing": {
+          "wall_time_ms": 0,
+          "inference_time_ms": 0,
+          "tool_time_ms": 0,
+          "active_time_ms": 0
+        },
+        "retries": 0
+      },
+      {
+        "stage_id": "pick_pr",
+        "stage_label": "pick_pr",
+        "timing": {
+          "wall_time_ms": 1201,
+          "inference_time_ms": 0,
+          "tool_time_ms": 1187,
+          "active_time_ms": 1187
+        },
+        "retries": 0
+      }
+    ],
+    "total_retries": 0,
+    "diff": {}
+  },
   "sandbox": {
     "kind": "ready",
     "plan": {
@@ -685,7 +731,12 @@
       "first_event_seq": 21,
       "prompt": null,
       "response": null,
-      "completion": null,
+      "completion": {
+        "outcome": "failed",
+        "notes": null,
+        "failure_reason": "Script failed with exit code: 1\n\n## output\nNOTHING TO FIX: no pull request with failed checks is waiting (0 looked at).\n",
+        "timestamp": "2026-11-26T23:56:06.038723580Z"
+      },
       "provider_used": null,
       "diff": null,
       "script_invocation": {
@@ -694,11 +745,27 @@
         "language": "python",
         "timeout_ms": 300000
       },
-      "script_timing": null,
+      "script_timing": {
+        "output": "blob://sha256/f25cf93631c1ea86599f2b5e3ac506f420eabb6a2b85a0a1069b02f1238ee7c4",
+        "exit_code": 1,
+        "duration_ms": 1187,
+        "termination": "exited",
+        "output_bytes": 77,
+        "live_streaming": true
+      },
       "parallel_results": null,
       "output": null,
+      "output_bytes": 77,
+      "live_streaming": true,
+      "termination": "exited",
       "started_at": "2026-11-26T23:56:04.832352273Z",
       "handler": "command",
+      "timing": {
+        "wall_time_ms": 1201,
+        "inference_time_ms": 0,
+        "tool_time_ms": 1187,
+        "active_time_ms": 1187
+      },
       "usage": {
         "input_tokens": 0,
         "output_tokens": 0,
@@ -707,7 +774,41 @@
         "cache_read_tokens": 0,
         "cache_write_tokens": 0
       },
-      "state": "running"
+      "state": "failed"
+    },
+    "exit@1": {
+      "first_event_seq": 32,
+      "prompt": null,
+      "response": null,
+      "completion": {
+        "outcome": "succeeded",
+        "notes": null,
+        "failure_reason": null,
+        "timestamp": "2026-11-26T23:56:09.904990031Z"
+      },
+      "provider_used": null,
+      "diff": null,
+      "script_invocation": null,
+      "script_timing": null,
+      "parallel_results": null,
+      "output": null,
+      "started_at": "2026-11-26T23:56:09.904964684Z",
+      "handler": "exit",
+      "timing": {
+        "wall_time_ms": 0,
+        "inference_time_ms": 0,
+        "tool_time_ms": 0,
+        "active_time_ms": 0
+      },
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "reasoning_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "state": "succeeded"
     }
   }
 }
