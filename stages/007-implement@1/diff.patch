@@ -1,0 +1,988 @@
+diff --git a/README.md b/README.md
+index f475922..dc24955 100644
+--- a/README.md
++++ b/README.md
+@@ -49,13 +49,14 @@ make build                              # downloads models once (~152 MB), then
+ make query Q="how do I verify a fix worked"
+ ```
+ 
+-Prefer to do it by hand, or want the `source-build` / `source-query` commands on your PATH?
++Prefer to do it by hand, or want the `source-build` / `source-query` / `source-http` commands on your PATH?
+ 
+ ```bash
+ python3 -m venv .venv
+-.venv/bin/pip install -e .              # installs the package + the two console scripts
++.venv/bin/pip install -e .              # installs the package + the console scripts
+ .venv/bin/source-build
+ .venv/bin/source-query "how do I verify a fix worked"
++.venv/bin/source-http --port 7801
+ ```
+ 
+ If your platform blocks system-wide `pip install` (e.g. Debian/Kali PEP 668), always run things
+@@ -89,6 +90,61 @@ claude mcp list                         # should show source ✓ connected
+ Then start a new session and ask something like *"check my notes for how to reproduce a flaky bug"*.
+ The agent calls `search_notes` by itself.
+ 
++### Run multiple localhost instances for agent-smith
++
++Source can also expose one `{vault, db}` pair over a tiny stdlib-only HTTP server, so agent-smith can
++bind a different Source instance per engagement or environment.
++
++> **Local trust boundary only:** `serve_http.py` binds to `127.0.0.1` on purpose. Do not expose it on a
++> network interface; it has no authentication and `/ingest` can write notes into the selected vault.
++
++Run one instance directly:
++
++```bash
++.venv/bin/python serve_http.py \
++  --vault ~/engagements/acme/source \
++  --db ~/engagements/acme/index/source.sqlite \
++  --port 7801
++```
++
++Or use the helper that sets `INSTANCE`, `SOURCE_VAULT`, and `SOURCE_DB` for you:
++
++```bash
++./run_instance.sh acme-prod \
++  --vault ~/engagements/acme/source \
++  --db ~/engagements/acme/index/source.sqlite \
++  --port 7801
++
++./run_instance.sh acme-stage \
++  --vault ~/engagements/acme-stage/source \
++  --db ~/engagements/acme-stage/index/source.sqlite \
++  --port 7802
++```
++
++agent-smith can then map `acme-prod -> http://127.0.0.1:7801` and
++`acme-stage -> http://127.0.0.1:7802` in its own `sources.yaml`.
++
++Endpoint shapes:
++
++```http
++GET /health
++=> {"ready":true,"instance":"acme-prod","vault":"/...","db":"/...","meta":{...}}
++
++GET /list
++=> {"ready":true,"instance":"acme-prod","vault":"/...","db":"/...","meta":{...},
++    "notes":[{"path":"findings/host-1.md","chunks":1}]}
++
++GET /search?q=ssrf&k=3&mode=keyword&path=findings&tags=finding,critical
++=> {"results":[{"rank":1,"path":"findings/host-1.md","heading":"Host 1","score":7.5,
++                "text":"SSRF on the admin endpoint.","tags":"finding critical",
++                "display":"### [1] findings/host-1.md › Host 1  (score 7.5)\nSSRF on the admin endpoint."}],
++    "display":"### [1] findings/host-1.md › Host 1  (score 7.5)\nSSRF on the admin endpoint."}
++
++POST /ingest
++{"notes":[{"id":"findings/host-1","title":"Host 1","tags":["finding"],"text":"SSRF on the admin endpoint."}]}
++=> writes `vault/findings/host-1.md`, incrementally rebuilds the index, and reloads it in-place
++```
++
+ ## Usage
+ 
+ ### MCP tools (what the agent sees)
+@@ -125,6 +181,9 @@ chunks whose frontmatter tags include all of the given tags.
+ The MCP server loads the index on first use. Restart the agent session (or `/mcp` → reconnect in
+ Claude Code) to pick up a rebuilt index.
+ 
++`serve_http.py` reloads its index after every successful `/ingest`, so new notes become searchable
++without restarting the process.
++
+ ### Tagging notes
+ 
+ Add YAML frontmatter tags to a note and they become a filter dimension (and they're stripped from the
+@@ -176,6 +235,7 @@ numbers before trusting any single configuration.
+ | Embedding model | `--model NAME` (any fastembed text model) | `BAAI/bge-small-en-v1.5` |
+ | Reranker | `--reranker NAME`, or `none` to disable | `Xenova/ms-marco-MiniLM-L-6-v2` |
+ | Index location | `build_index.py --db PATH`, `SOURCE_DB=` for the MCP server | `./index/source.sqlite` |
++| Instance name | `INSTANCE=` (used by MCP and `/health`) | `source` |
+ 
+ The models are recorded in the index, and queries always use the ones the index was built with.
+ Changing a model therefore means a full rebuild (the incremental cache invalidates automatically).
+@@ -191,6 +251,8 @@ source_rag.py        everything: chunking, embedding, SQLite index, hybrid searc
+ build_index.py       builds index/source.sqlite (incremental; --full, --watch)
+ query.py             terminal search (--mode, --path, --tag, --list)
+ mcp_server.py        MCP server (stdio) for Claude Code / opencode
++serve_http.py        stdlib localhost HTTP service (/health, /list, /search, /ingest)
++run_instance.sh      helper to launch one named HTTP instance under .venv
+ eval_retrieval.py    quality benchmark
+ eval/questions.json  the benchmark's questions with expected answers
+ tests/               unit tests (run without the ML deps, via a fake embedder)
+diff --git a/mcp_server.py b/mcp_server.py
+index 3044f1f..ae30f92 100644
+--- a/mcp_server.py
++++ b/mcp_server.py
+@@ -41,10 +41,7 @@ def search_notes(query: str, k: int = 3, mode: str = "hybrid", path: str | None
+     Results are my own notes — verify against the live system before relying on them.
+     """
+     hits = idx().search(query, max(1, min(k, 20)), mode, path, rerank=rerank, tags=tags)
+-    if not hits:
+-        return "no matches"
+-    return "\n\n".join(f"### [{i}] {h['path']} › {h['heading'] or '(top)'}  (score {h['score']})\n{h['text']}"
+-                       for i, h in enumerate(hits, 1))
++    return R.format_search_hits(hits)
+ 
+ 
+ @mcp.tool()
+diff --git a/pyproject.toml b/pyproject.toml
+index 106f3c6..b17f7b2 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -21,10 +21,11 @@ dev = ["pytest>=8"]
+ # `pip install -e .` puts these on your PATH (an alternative to `.venv/bin/python build_index.py`).
+ [project.scripts]
+ source-build = "build_index:main"
++source-http = "serve_http:main"
+ source-query = "query:main"
+ 
+ [tool.setuptools]
+-py-modules = ["source_rag", "build_index", "query", "mcp_server", "eval_retrieval"]
++py-modules = ["source_rag", "build_index", "query", "mcp_server", "serve_http", "eval_retrieval"]
+ 
+ [tool.pytest.ini_options]
+ addopts = "-q"
+diff --git a/run_instance.sh b/run_instance.sh
+new file mode 100755
+index 0000000..1d9d3d2
+--- /dev/null
++++ b/run_instance.sh
+@@ -0,0 +1,50 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++if [[ $# -lt 1 ]]; then
++  echo "usage: $0 <name> --vault <dir> --db <file> --port <n>" >&2
++  exit 2
++fi
++
++name=$1
++shift
++vault=""
++db=""
++port=""
++
++while [[ $# -gt 0 ]]; do
++  case "$1" in
++    --vault)
++      vault=${2-}
++      shift 2
++      ;;
++    --db)
++      db=${2-}
++      shift 2
++      ;;
++    --port)
++      port=${2-}
++      shift 2
++      ;;
++    *)
++      echo "unknown argument: $1" >&2
++      exit 2
++      ;;
++  esac
++done
++
++if [[ -z "$vault" || -z "$db" || -z "$port" ]]; then
++  echo "usage: $0 <name> --vault <dir> --db <file> --port <n>" >&2
++  exit 2
++fi
++
++SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
++
++export INSTANCE="$name"
++export SOURCE_VAULT="$vault"
++export SOURCE_DB="$db"
++
++exec "$SCRIPT_DIR/.venv/bin/python" "$SCRIPT_DIR/serve_http.py" \
++  --vault "$vault" \
++  --db "$db" \
++  --port "$port"
+diff --git a/serve_http.py b/serve_http.py
+new file mode 100644
+index 0000000..c2baa8b
+--- /dev/null
++++ b/serve_http.py
+@@ -0,0 +1,340 @@
++#!/usr/bin/env python3
++"""Local JSON HTTP service for one Source vault/index pair.
++
++Endpoints:
++  GET  /health
++  GET  /list
++  GET  /search?q=...&k=...&mode=...&path=...&tags=a,b
++  POST /ingest   {"notes": [{"id", "title", "tags", "text"}, ...]}
++"""
++from __future__ import annotations
++
++import argparse
++import json
++import os
++from http import HTTPStatus
++from http.server import BaseHTTPRequestHandler, HTTPServer
++from pathlib import Path
++from urllib.parse import parse_qs, urlparse
++
++import source_rag as R
++
++HOST = "127.0.0.1"
++MAX_BODY_BYTES = 1_000_000
++MAX_NOTES = 100
++ALLOWED_MODES = {"hybrid", "vector", "keyword"}
++SEGMENT_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
++TAG_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
++
++
++class ServiceState:
++    def __init__(self, vault: Path, db_path: Path, *, instance: str = R.INSTANCE,
++                 model: str = R.DEFAULT_MODEL, reranker: str = R.DEFAULT_RERANKER,
++                 exts: set[str] | None = None, cache_dir: Path = R.DEFAULT_MODELS,
++                 builder=R.build, index_factory=R.Index, log=None):
++        self.vault = Path(vault).expanduser().resolve()
++        self.db_path = Path(db_path).expanduser().resolve()
++        self.instance = instance
++        self.model = model
++        self.reranker = reranker
++        self.exts = exts or set(R.DEFAULT_EXTS)
++        self.cache_dir = Path(cache_dir).expanduser().resolve()
++        self.builder = builder
++        self.index_factory = index_factory
++        self.log = log or (lambda *args: None)
++        self.index = None
++        self.meta = None
++        if self.db_path.exists():
++            self.reload_index()
++
++    @property
++    def ready(self) -> bool:
++        return self.index is not None
++
++    def close(self):
++        if self.index is not None:
++            self.index.close()
++            self.index = None
++
++    def set_index(self, index):
++        old = self.index
++        self.index = index
++        self.meta = getattr(index, "meta", None)
++        if old is not None and old is not index:
++            old.close()
++
++    def reload_index(self):
++        new_index = self.index_factory(self.db_path)
++        self.set_index(new_index)
++
++    def rebuild_and_reload(self):
++        meta = self.builder(self.vault, self.db_path, self.model, self.exts, self.cache_dir,
++                            log=self.log, reranker=self.reranker, full=False)
++        self.reload_index()
++        self.meta = meta
++        return meta
++
++    def status_payload(self) -> dict:
++        payload = {
++            "ready": self.ready,
++            "instance": self.instance,
++            "vault": str(self.vault),
++            "db": str(self.db_path),
++        }
++        if self.meta is not None:
++            payload["meta"] = self.meta
++        return payload
++
++
++def make_server(state: ServiceState, *, host: str = HOST, port: int = 8000) -> HTTPServer:
++    class Handler(BaseHTTPRequestHandler):
++        server_version = "SourceHTTP/0.1"
++
++        def log_message(self, format, *args):
++            return
++
++        @property
++        def state(self) -> ServiceState:
++            return self.server.source_state
++
++        def _send_json(self, status: int, payload: dict):
++            body = json.dumps(payload).encode()
++            self.send_response(status)
++            self.send_header("Content-Type", "application/json")
++            self.send_header("Content-Length", str(len(body)))
++            self.end_headers()
++            self.wfile.write(body)
++
++        def _error(self, status: int, message: str):
++            self._send_json(status, {"error": message})
++
++        def _read_json(self):
++            raw_len = self.headers.get("Content-Length")
++            if raw_len is not None:
++                try:
++                    content_length = int(raw_len)
++                except ValueError:
++                    raise ValueError("invalid Content-Length")
++                if content_length > MAX_BODY_BYTES:
++                    remaining = content_length
++                    while remaining > 0:
++                        chunk = self.rfile.read(min(65536, remaining))
++                        if not chunk:
++                            break
++                        remaining -= len(chunk)
++                    raise OverflowError("request body too large")
++                raw = self.rfile.read(content_length)
++            else:
++                raw = self.rfile.read(MAX_BODY_BYTES + 1)
++                if len(raw) > MAX_BODY_BYTES:
++                    raise OverflowError("request body too large")
++            try:
++                data = json.loads(raw.decode("utf-8"))
++            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
++                raise ValueError("malformed JSON") from exc
++            if not isinstance(data, dict):
++                raise ValueError("JSON body must be an object")
++            return data
++
++        def _require_ready(self) -> bool:
++            if self.state.ready:
++                return True
++            self._error(HTTPStatus.SERVICE_UNAVAILABLE, "index not ready")
++            return False
++
++        def do_GET(self):
++            parsed = urlparse(self.path)
++            if parsed.path == "/health":
++                self._send_json(HTTPStatus.OK, self.state.status_payload())
++                return
++            if parsed.path == "/list":
++                if not self._require_ready():
++                    return
++                payload = self.state.status_payload()
++                payload["notes"] = self.state.index.list_notes()
++                self._send_json(HTTPStatus.OK, payload)
++                return
++            if parsed.path == "/search":
++                if not self._require_ready():
++                    return
++                self._handle_search(parsed.query)
++                return
++            self._error(HTTPStatus.NOT_FOUND, "not found")
++
++        def _handle_search(self, query_string: str):
++            params = parse_qs(query_string, keep_blank_values=True)
++            query = (params.get("q", [""])[0] or "").strip()
++            if not query:
++                self._error(HTTPStatus.BAD_REQUEST, "q is required")
++                return
++
++            raw_k = params.get("k", [None])[0]
++            if raw_k in (None, ""):
++                k = 3
++            else:
++                try:
++                    k = int(raw_k)
++                except ValueError:
++                    self._error(HTTPStatus.BAD_REQUEST, "k must be an integer")
++                    return
++                k = max(1, min(k, 20))
++
++            mode = (params.get("mode", ["hybrid"])[0] or "hybrid").strip()
++            if mode not in ALLOWED_MODES:
++                self._error(HTTPStatus.BAD_REQUEST, "mode must be hybrid, vector, or keyword")
++                return
++
++            path_filter = params.get("path", [None])[0]
++            tags = []
++            for raw in params.get("tags", []):
++                tags.extend(tag.strip() for tag in raw.split(",") if tag.strip())
++            tags = tags or None
++
++            hits = self.state.index.search(query, k, mode, path_filter, rerank=True, tags=tags)
++            results = []
++            for rank, hit in enumerate(hits, 1):
++                item = {"rank": rank, **hit, "display": R.format_search_hit(hit, rank)}
++                results.append(item)
++            self._send_json(HTTPStatus.OK, {"results": results, "display": R.format_search_hits(results)})
++
++        def do_POST(self):
++            parsed = urlparse(self.path)
++            if parsed.path != "/ingest":
++                self._error(HTTPStatus.NOT_FOUND, "not found")
++                return
++            try:
++                payload = self._read_json()
++            except OverflowError as exc:
++                self._error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, str(exc))
++                return
++            except ValueError as exc:
++                self._error(HTTPStatus.BAD_REQUEST, str(exc))
++                return
++
++            notes = payload.get("notes")
++            if not isinstance(notes, list):
++                self._error(HTTPStatus.BAD_REQUEST, "notes must be a list")
++                return
++            if not notes:
++                self._error(HTTPStatus.BAD_REQUEST, "notes must not be empty")
++                return
++            if len(notes) > MAX_NOTES:
++                self._error(HTTPStatus.BAD_REQUEST, f"too many notes; max {MAX_NOTES}")
++                return
++
++            try:
++                validated = validate_notes(notes, self.state.vault)
++            except ValueError as exc:
++                self._error(HTTPStatus.BAD_REQUEST, str(exc))
++                return
++
++            try:
++                for note_path, note in validated:
++                    note_path.parent.mkdir(parents=True, exist_ok=True)
++                    note_path.write_text(render_markdown(note), encoding="utf-8")
++                meta = self.state.rebuild_and_reload()
++            except Exception:
++                self._error(HTTPStatus.INTERNAL_SERVER_ERROR, "rebuild failed")
++                return
++
++            response = self.state.status_payload()
++            response.update({"ingested": len(validated), "meta": meta})
++            self._send_json(HTTPStatus.OK, response)
++
++    server = HTTPServer((host, port), Handler)
++    server.source_state = state
++    return server
++
++
++def validate_notes(notes: list[dict], vault: Path) -> list[tuple[Path, dict]]:
++    seen_ids = set()
++    out = []
++    for note in notes:
++        if not isinstance(note, dict):
++            raise ValueError("each note must be an object")
++        note_id = note.get("id")
++        title = note.get("title")
++        text = note.get("text")
++        tags = note.get("tags", [])
++        if not isinstance(note_id, str) or not note_id:
++            raise ValueError("note id must be a non-empty string")
++        if note_id in seen_ids:
++            raise ValueError("duplicate note ids")
++        seen_ids.add(note_id)
++        if not isinstance(title, str) or not title.strip():
++            raise ValueError("note title must be a non-empty string")
++        if not isinstance(text, str):
++            raise ValueError("note text must be a string")
++        if tags is None:
++            tags = []
++        if not isinstance(tags, list) or not all(isinstance(tag, str) and valid_tag(tag) for tag in tags):
++            raise ValueError("note tags must be slug strings")
++        note_path = note_path_for_id(vault, note_id)
++        out.append((note_path, {"id": note_id, "title": title.strip(), "text": text, "tags": tags}))
++    return out
++
++
++def valid_tag(tag: str) -> bool:
++    return bool(tag) and all(ch in TAG_CHARS for ch in tag)
++
++
++def note_path_for_id(vault: Path, note_id: str) -> Path:
++    if "\\" in note_id or "\x00" in note_id:
++        raise ValueError("invalid note id")
++    rel = Path(note_id)
++    if rel.is_absolute():
++        raise ValueError("invalid note id")
++    parts = rel.parts
++    if not parts:
++        raise ValueError("invalid note id")
++    for part in parts:
++        if part in {"", ".", ".."} or part.startswith(".") or any(ch not in SEGMENT_CHARS for ch in part):
++            raise ValueError("invalid note id")
++    note_path = (vault / rel).with_suffix(".md").resolve()
++    try:
++        note_path.relative_to(vault)
++    except ValueError as exc:
++        raise ValueError("invalid note id") from exc
++    return note_path
++
++
++def render_markdown(note: dict) -> str:
++    lines = []
++    if note["tags"]:
++        lines.extend(["---", f"tags: [{', '.join(note['tags'])}]", "---"])
++    lines.extend([f"# {note['title']}", "", note["text"]])
++    return "\n".join(lines).rstrip() + "\n"
++
++
++def main(argv=None):
++    ap = argparse.ArgumentParser(description=__doc__)
++    ap.add_argument("--vault", default=os.environ.get(R.VAULT_ENV, str(R.DEFAULT_VAULT)))
++    ap.add_argument("--db", default=os.environ.get(R.DB_ENV, str(R.DEFAULT_DB)))
++    ap.add_argument("--port", type=int, default=7801)
++    ap.add_argument("--model", default=R.DEFAULT_MODEL)
++    ap.add_argument("--reranker", default=R.DEFAULT_RERANKER)
++    ap.add_argument("--ext", default=",".join(sorted(R.DEFAULT_EXTS)))
++    a = ap.parse_args(argv)
++
++    exts = {e if e.startswith(".") else f".{e}" for e in a.ext.lower().split(",") if e}
++    state = ServiceState(
++        vault=Path(a.vault),
++        db_path=Path(a.db),
++        instance=R.INSTANCE,
++        model=a.model,
++        reranker=a.reranker,
++        exts=exts,
++    )
++    server = make_server(state, port=a.port)
++    print(f"serving {state.instance} on http://{HOST}:{server.server_port}")
++    try:
++        server.serve_forever()
++    except KeyboardInterrupt:
++        pass
++    finally:
++        server.server_close()
++        state.close()
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/source_rag.py b/source_rag.py
+index edbd9b1..35a5427 100644
+--- a/source_rag.py
++++ b/source_rag.py
+@@ -40,7 +40,9 @@ DEFAULT_VAULT = HERE / BRAND
+ DEFAULT_MODELS = HERE / "models"
+ VAULT_ENV = f"{BRAND.upper()}_VAULT"
+ DB_ENV = f"{BRAND.upper()}_DB"
+-MCP_NAME = BRAND
++INSTANCE_ENV = "INSTANCE"
++INSTANCE = (os.environ.get(INSTANCE_ENV, BRAND) or BRAND).strip() or BRAND
++MCP_NAME = INSTANCE
+ 
+ DEFAULT_MODEL = "BAAI/bge-small-en-v1.5"   # 384-dim, ~64 MB, fast on CPU
+ DEFAULT_RERANKER = "Xenova/ms-marco-MiniLM-L-6-v2"   # cross-encoder, ~80 MB; "none" disables
+@@ -212,6 +214,16 @@ def embed_input(c: Chunk) -> str:
+     return f"{title} — {c.heading}\n\n{c.text}" if c.heading else f"{title}\n\n{c.text}"
+ 
+ 
++def format_search_hit(hit: dict, rank: int) -> str:
++    return f"### [{rank}] {hit['path']} › {hit['heading'] or '(top)'}  (score {hit['score']})\n{hit['text']}"
++
++
++def format_search_hits(hits: list[dict]) -> str:
++    if not hits:
++        return "no matches"
++    return "\n\n".join(format_search_hit(hit, i) for i, hit in enumerate(hits, 1))
++
++
+ # ───────────────────────────── embedding ─────────────────────────────
+ 
+ class Embedder:
+@@ -397,6 +409,9 @@ class Index:
+         rr = self.meta.get("reranker", "none")   # older indexes have no reranker entry
+         self.reranker = Reranker(rr, cache_dir, offline=offline) if rr != "none" and embedder is None else None
+ 
++    def close(self):
++        self.con.close()
++
+     def _vector(self, q: str, k: int) -> list[int]:
+         scores = self.mat @ self.emb.query(q)
+         return list(np.argsort(-scores)[:k])
+diff --git a/tests/test_chunking.py b/tests/test_chunking.py
+index 71d93fc..3e91424 100644
+--- a/tests/test_chunking.py
++++ b/tests/test_chunking.py
+@@ -4,6 +4,7 @@ A FakeEmbedder (deterministic, no fastembed) lets us exercise the real build / i
+ / search / tag-filter code paths too, so these run anywhere numpy + pytest are installed —
+ no model download, no onnxruntime.
+ """
++import importlib
+ import hashlib
+ 
+ import numpy as np
+@@ -99,6 +100,34 @@ def test_embed_input_uses_title_and_heading():
+     assert R.embed_input(c).startswith("my note — Some Heading")
+ 
+ 
++def test_instance_defaults_to_source_and_honors_env_on_reload(monkeypatch):
++    monkeypatch.delenv("INSTANCE", raising=False)
++    reloaded = importlib.reload(R)
++    assert reloaded.INSTANCE == "source"
++    assert reloaded.MCP_NAME == "source"
++
++    monkeypatch.setenv("INSTANCE", "eng-a")
++    reloaded = importlib.reload(R)
++    assert reloaded.INSTANCE == "eng-a"
++    assert reloaded.MCP_NAME == "eng-a"
++
++    monkeypatch.delenv("INSTANCE", raising=False)
++    importlib.reload(R)
++
++
++def test_format_search_hits_matches_existing_mcp_shape():
++    hits = [
++        {"path": "guide.md", "heading": "Guide", "score": 12.34, "text": "First result", "tags": "alpha"},
++        {"path": "notes/top.md", "heading": "", "score": 8.0, "text": "Second result", "tags": ""},
++    ]
++
++    assert R.format_search_hits(hits) == (
++        "### [1] guide.md › Guide  (score 12.34)\nFirst result\n\n"
++        "### [2] notes/top.md › (top)  (score 8.0)\nSecond result"
++    )
++    assert R.format_search_hits([]) == "no matches"
++
++
+ # ───────────────────────── build + search (fake embedder) ─────────────────────────
+ 
+ def _vault(tmp_path):
+diff --git a/tests/test_http_service.py b/tests/test_http_service.py
+new file mode 100644
+index 0000000..ee30503
+--- /dev/null
++++ b/tests/test_http_service.py
+@@ -0,0 +1,348 @@
++import hashlib
++import json
++import threading
++import urllib.error
++import urllib.parse
++import urllib.request
++from contextlib import contextmanager
++from pathlib import Path
++
++import numpy as np
++import pytest
++
++import source_rag as R
++
++
++class FakeEmbedder:
++    model_name = "fake"
++    dim = 16
++
++    def _vec(self, text: str) -> np.ndarray:
++        seed = int.from_bytes(hashlib.sha256(text.encode()).digest()[:8], "big")
++        v = np.random.default_rng(seed).standard_normal(self.dim).astype(np.float32)
++        return v / (np.linalg.norm(v) or 1.0)
++
++    def passages(self, texts):
++        return (np.vstack([self._vec(t) for t in texts]) if texts
++                else np.zeros((0, self.dim), dtype=np.float32))
++
++    def query(self, text):
++        return self._vec(text)
++
++
++@pytest.fixture
++def serve_http_module():
++    import serve_http
++
++    return serve_http
++
++
++@contextmanager
++def running_server(serve_http_module, state):
++    server = serve_http_module.make_server(state, port=0)
++    thread = threading.Thread(target=server.serve_forever, daemon=True)
++    thread.start()
++    try:
++        yield f"http://127.0.0.1:{server.server_port}"
++    finally:
++        server.shutdown()
++        thread.join(timeout=5)
++        server.server_close()
++        state.close()
++
++
++class RecordingIndex:
++    def __init__(self):
++        self.meta = {"built_at": "2026-01-01 00:00:00", "files": 1, "chunks": 1}
++        self.calls = []
++
++    def search(self, query, k, mode, path_filter=None, rerank=True, tags=None):
++        self.calls.append({
++            "query": query,
++            "k": k,
++            "mode": mode,
++            "path_filter": path_filter,
++            "rerank": rerank,
++            "tags": tags,
++        })
++        if query == "miss":
++            return []
++        return [{"path": "guide.md", "heading": "Guide", "score": 7.5, "text": "Matched text", "tags": "alpha beta"}]
++
++    def list_notes(self):
++        return [{"path": "guide.md", "chunks": 1}]
++
++    def close(self):
++        pass
++
++
++def request_json(url, *, method="GET", payload=None, expect_status=200):
++    data = None if payload is None else json.dumps(payload).encode()
++    headers = {} if payload is None else {"Content-Type": "application/json"}
++    req = urllib.request.Request(url, data=data, headers=headers, method=method)
++    try:
++        with urllib.request.urlopen(req, timeout=5) as resp:
++            body = resp.read()
++            assert resp.status == expect_status
++            return resp.status, json.loads(body.decode())
++    except urllib.error.HTTPError as exc:
++        body = exc.read()
++        assert exc.code == expect_status, body.decode()
++        return exc.code, json.loads(body.decode())
++
++
++def build_service_state(serve_http_module, vault: Path, db: Path, *, fake=None, instance="source", builder=None):
++    fake = fake or FakeEmbedder()
++
++    def build_index(selected_vault, selected_db, model, exts, cache_dir, *, log, reranker, full=False):
++        return R.build(selected_vault, selected_db, model, exts, cache_dir,
++                       log=log, reranker="none", full=full, embedder=fake)
++
++    return serve_http_module.ServiceState(
++        vault=vault,
++        db_path=db,
++        instance=instance,
++        builder=builder or build_index,
++        index_factory=lambda path: R.Index(path, embedder=fake),
++        reranker="none",
++    )
++
++
++def seed_index(vault: Path, db: Path, *, fake=None):
++    fake = fake or FakeEmbedder()
++    return R.build(vault, db, "fake", {".md"}, vault / "models",
++                   log=lambda *args: None, reranker="none", embedder=fake)
++
++
++def test_health_and_list_return_instance_and_index_state(tmp_path, serve_http_module):
++    vault = tmp_path / "vault"
++    vault.mkdir()
++    (vault / "guide.md").write_text("# Guide\n\nAlpha note body with locale guidance.\n")
++    db = tmp_path / "idx.sqlite"
++    seed_index(vault, db)
++
++    state = build_service_state(serve_http_module, vault, db, instance="eng-a")
++    with running_server(serve_http_module, state) as base_url:
++        _, health = request_json(f"{base_url}/health")
++        assert health["ready"] is True
++        assert health["instance"] == "eng-a"
++        assert health["vault"] == str(vault.resolve())
++        assert health["db"] == str(db.resolve())
++        assert health["meta"]["files"] == 1
++
++        _, listing = request_json(f"{base_url}/list")
++        assert listing["ready"] is True
++        assert listing["instance"] == "eng-a"
++        assert listing["notes"] == [{"path": "guide.md", "chunks": 1}]
++        assert listing["meta"]["chunks"] == 1
++
++
++def test_search_endpoint_formats_filters_and_validates_params(tmp_path, serve_http_module):
++    vault = tmp_path / "vault"
++    vault.mkdir()
++    db = tmp_path / "idx.sqlite"
++    index = RecordingIndex()
++    state = serve_http_module.ServiceState(vault=vault, db_path=db, instance="eng-a")
++    state.set_index(index)
++
++    with running_server(serve_http_module, state) as base_url:
++        _, body = request_json(
++            f"{base_url}/search?q=needle&k=99&mode=keyword&path=refs&tags=alpha,beta"
++        )
++        assert index.calls[-1] == {
++            "query": "needle",
++            "k": 20,
++            "mode": "keyword",
++            "path_filter": "refs",
++            "rerank": True,
++            "tags": ["alpha", "beta"],
++        }
++        assert body["display"] == R.format_search_hits(body["results"])
++        assert body["results"][0]["rank"] == 1
++        assert body["results"][0]["display"].startswith("### [1] guide.md › Guide")
++
++        _, miss = request_json(f"{base_url}/search?q=miss")
++        assert miss == {"results": [], "display": "no matches"}
++
++        request_json(f"{base_url}/search", expect_status=400)
++        request_json(f"{base_url}/search?q=   ", expect_status=400)
++        request_json(f"{base_url}/search?q=x&k=abc", expect_status=400)
++        request_json(f"{base_url}/search?q=x&mode=nope", expect_status=400)
++
++
++def test_ingest_writes_markdown_rebuilds_reloads_and_searches(tmp_path, serve_http_module):
++    vault = tmp_path / "vault"
++    vault.mkdir()
++    db = tmp_path / "idx.sqlite"
++    build_calls = []
++    fake = FakeEmbedder()
++
++    def builder(selected_vault, selected_db, model, exts, cache_dir, *, log, reranker, full=False):
++        build_calls.append({
++            "vault": selected_vault,
++            "db": selected_db,
++            "model": model,
++            "exts": exts,
++            "cache_dir": cache_dir,
++            "reranker": reranker,
++            "full": full,
++        })
++        return R.build(selected_vault, selected_db, model, exts, cache_dir,
++                       log=log, reranker="none", full=full, embedder=fake)
++
++    state = serve_http_module.ServiceState(
++        vault=vault,
++        db_path=db,
++        builder=builder,
++        index_factory=lambda path: R.Index(path, embedder=fake),
++        reranker="none",
++    )
++
++    with running_server(serve_http_module, state) as base_url:
++        _, body = request_json(
++            f"{base_url}/ingest",
++            method="POST",
++            payload={
++                "notes": [{
++                    "id": "findings/host-1",
++                    "title": "Host 1",
++                    "tags": ["finding", "critical"],
++                    "text": "SSRF on the admin endpoint.",
++                }],
++            },
++        )
++        assert body["ingested"] == 1
++        note_path = vault / "findings" / "host-1.md"
++        assert note_path.read_text() == (
++            "---\n"
++            "tags: [finding, critical]\n"
++            "---\n"
++            "# Host 1\n\n"
++            "SSRF on the admin endpoint.\n"
++        )
++        assert len(build_calls) == 1
++        assert build_calls[0]["vault"] == vault
++        assert build_calls[0]["db"] == db
++
++        _, search = request_json(f"{base_url}/search?q=SSRF&mode=keyword")
++        assert search["results"][0]["path"] == "findings/host-1.md"
++
++        _, listing = request_json(f"{base_url}/list")
++        assert listing["notes"] == [{"path": "findings/host-1.md", "chunks": 1}]
++
++
++def test_ingest_is_idempotent_upsert_and_isolated_by_vault(tmp_path, serve_http_module):
++    vault_a = tmp_path / "vault-a"
++    vault_b = tmp_path / "vault-b"
++    vault_a.mkdir()
++    vault_b.mkdir()
++    db_a = tmp_path / "a.sqlite"
++    db_b = tmp_path / "b.sqlite"
++
++    state_a = build_service_state(serve_http_module, vault_a, db_a, instance="eng-a")
++    state_b = build_service_state(serve_http_module, vault_b, db_b, instance="eng-b")
++
++    with running_server(serve_http_module, state_a) as url_a, running_server(serve_http_module, state_b) as url_b:
++        note = {
++            "id": "memories/entry",
++            "title": "Entry",
++            "tags": ["memory"],
++            "text": "Original content.",
++        }
++        request_json(f"{url_a}/ingest", method="POST", payload={"notes": [note]})
++
++        note["text"] = "Updated content only in vault A."
++        request_json(f"{url_a}/ingest", method="POST", payload={"notes": [note]})
++
++        _, list_a = request_json(f"{url_a}/list")
++        assert list_a["notes"] == [{"path": "memories/entry.md", "chunks": 1}]
++        assert (vault_a / "memories" / "entry.md").read_text().endswith("Updated content only in vault A.\n")
++
++        _, search_a = request_json(f"{url_a}/search?q=Updated&mode=keyword")
++        assert search_a["results"][0]["text"] == "Updated content only in vault A."
++
++        _, list_b = request_json(f"{url_b}/health")
++        assert list_b["ready"] is False
++        request_json(f"{url_b}/search?q=Updated", expect_status=503)
++
++
++def test_ingest_rejects_malformed_duplicate_traversal_and_oversize_without_writes(tmp_path, serve_http_module):
++    vault = tmp_path / "vault"
++    vault.mkdir()
++    db = tmp_path / "idx.sqlite"
++    state = build_service_state(serve_http_module, vault, db)
++
++    with running_server(serve_http_module, state) as base_url:
++        bad_json_req = urllib.request.Request(
++            f"{base_url}/ingest",
++            data=b"{not-json",
++            headers={"Content-Type": "application/json"},
++            method="POST",
++        )
++        with pytest.raises(urllib.error.HTTPError) as excinfo:
++            urllib.request.urlopen(bad_json_req, timeout=5)
++        assert excinfo.value.code == 400
++
++        request_json(f"{base_url}/ingest", method="POST", payload={"notes": []}, expect_status=400)
++        request_json(
++            f"{base_url}/ingest",
++            method="POST",
++            payload={"notes": [{"id": "dup", "title": "A", "text": "x"}, {"id": "dup", "title": "B", "text": "y"}]},
++            expect_status=400,
++        )
++        request_json(
++            f"{base_url}/ingest",
++            method="POST",
++            payload={"notes": [{"id": "../escape", "title": "Oops", "text": "x"}]},
++            expect_status=400,
++        )
++
++        oversized = b"x" * (serve_http_module.MAX_BODY_BYTES + 1)
++        req = urllib.request.Request(
++            f"{base_url}/ingest",
++            data=oversized,
++            headers={"Content-Type": "application/json"},
++            method="POST",
++        )
++        with pytest.raises(urllib.error.HTTPError) as excinfo:
++            urllib.request.urlopen(req, timeout=5)
++        assert excinfo.value.code == 413
++
++    assert list(vault.rglob("*.md")) == []
++
++
++def test_rebuild_failure_returns_500_and_keeps_old_index(tmp_path, serve_http_module):
++    vault = tmp_path / "vault"
++    vault.mkdir()
++    (vault / "guide.md").write_text("# Guide\n\nExisting indexed note.\n")
++    db = tmp_path / "idx.sqlite"
++    fake = FakeEmbedder()
++    seed_index(vault, db, fake=fake)
++
++    def failing_builder(*args, **kwargs):
++        raise RuntimeError("boom")
++
++    state = serve_http_module.ServiceState(
++        vault=vault,
++        db_path=db,
++        builder=failing_builder,
++        index_factory=lambda path: R.Index(path, embedder=fake),
++        reranker="none",
++    )
++
++    with running_server(serve_http_module, state) as base_url:
++        request_json(
++            f"{base_url}/ingest",
++            method="POST",
++            payload={"notes": [{"id": "new", "title": "New", "text": "fresh content"}]},
++            expect_status=500,
++        )
++
++        _, search = request_json(f"{base_url}/search?q=Existing&mode=keyword")
++        assert search["results"][0]["path"] == "guide.md"
++
++        _, miss = request_json(f"{base_url}/search?q=fresh&mode=keyword")
++        assert miss == {"results": [], "display": "no matches"}
++
++        _, listing = request_json(f"{base_url}/list")
++        assert listing["notes"] == [{"path": "guide.md", "chunks": 1}]
