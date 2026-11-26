@@ -1,0 +1,101 @@
+_version = 1
+
+# Issue -> spec -> human approval -> code -> checks -> one independent review
+# (standard or security) -> draft PR.
+#
+# Started by its Fabro automation (schedule or the Run button in the web UI) or:
+#   fabro run .fabro/workflows/issue-to-pr/workflow.toml [-I issue=<number>]
+#
+# The graph in workflow.fabro is the same in every repository that uses this
+# pipeline. Everything specific to this repository is set below.
+# No secrets belong in this file. Keys and tokens live in Fabro's vault.
+
+[workflow]
+graph = "workflow.fabro"
+
+[run.inputs]
+# Issue number to work on. "0" lets the run pick the oldest open issue that
+# carries approval_label and not in_progress_label. Automations cannot pass
+# inputs, so they always get "0".
+issue = "0"
+# Label a maintainer adds to release an issue to the pipeline.
+approval_label = "fabro-approved"
+# Label the run adds to the issue it accepts. While any open issue carries
+# it, automation runs pick no other issue: one build at a time. The last step
+# of the run replaces it with built_label or failed_label. If a run was
+# killed and the label stayed behind, remove it by hand.
+in_progress_label = "fabro-in-progress"
+# How the run ended. Automation runs skip issues carrying either; remove the
+# label to have the issue built again.
+built_label = "fabro-built"
+failed_label = "fabro-failed"
+# GitHub logins allowed to release an issue (comma separated, no spaces).
+maintainers = "RiieCco,blabla1337,JorgeCarvalhoPT"
+
+# Retry budgets. When a budget is used up the run pauses and asks a human.
+# Failed verifications in a row that go back to the implementer.
+first_fix_attempts = "2"
+# Failed verifications in a row before a human is asked (the strong model
+# handles the attempts after first_fix_attempts).
+max_fix_attempts = "3"
+# Times a reviewer may reject the change before a human is asked. The first
+# rejection goes back to the implementer, the next one to the strong model.
+max_review_rounds = "3"
+
+# Which reviewer. A change gets the security reviewer (strong model, Trail of
+# Bits differential-review skill in .fabro/skills/) if it touches one of the
+# sensitive paths (substrings of changed non-test paths), adds a risky
+# construct, has more changed lines than this, or the spec says
+# "Risk level: high". Everything else gets the standard reviewer, which can
+# still hand a change over to the security reviewer.
+max_standard_review_lines = "400"
+sensitive_paths = "mcp_server,pyproject.toml,requirements,Makefile,setup"
+# Directory that holds the tests, or "none". Python code changes must come
+# with a change under it unless the spec says "Tests required: no".
+tests_dir = "tests/"
+
+# --- This repository --------------------------------------------------------
+repo_owner = "0x0pointer"
+repo_name = "Source"
+# Shown to every agent as: the <owner>/<name> repository (<description>).
+repo_description = "Source, a local and offline hybrid search over a folder of Markdown notes, exposed over MCP. Python 3.11+: the engine (chunking, SQLite index, vector and keyword search, reranking) in source_rag.py, the command line tools build_index.py and query.py, the MCP server in mcp_server.py, the retrieval benchmark in eval_retrieval.py, tests in tests/, and the sample notes vault in source/"
+# Extra rule appended to the list of paths agents may not touch.
+repo_rules = "The source/ directory is the sample notes vault that the tool indexes, not program code: change it only when the issue is about the sample notes. Never commit index/ or models/. Tests must keep running without fastembed and without a model download, so use the fake embedder as tests/test_chunking.py does."
+# Shell commands. install_command also runs as the first step of every run.
+# lint_command may be "none".
+install_command = "pip install -q numpy pytest pypdf mcp"
+lint_command = "none"
+test_command = "python3 -m pytest -q"
+# Told to the agents: what can and cannot be run in the sandbox.
+test_notes = "The unit tests run here with python3 -m pytest, as they do in CI. They use a fake embedder: fastembed and onnxruntime are not installed in this sandbox and no embedding model can be downloaded, so building a real index, real queries and the retrieval benchmark (eval_retrieval.py) cannot be run here."
+# Paths a run may never change (comma separated, no spaces): prefixes and
+# exact file names. The verify step rejects the run if one of them changed.
+protected_prefixes = ".github/,.fabro/,.env"
+protected_files = "LICENSE"
+
+# Default model for any stage the stylesheet in workflow.fabro does not cover.
+[run.model]
+name = "gpt-5.4"
+
+[run.environment]
+id = "source"
+
+[environments.source]
+provider = "docker"
+
+[environments.source.image]
+# Built from .fabro/docker/Dockerfile
+docker = "source-fabro:latest"
+
+[environments.source.resources]
+cpu = 1
+memory = "1000MB"
+
+[run.pull_request]
+enabled = true
+draft = true
+
+[run.integrations.github.permissions]
+issues = "write"
+contents = "write"
+pull_requests = "write"

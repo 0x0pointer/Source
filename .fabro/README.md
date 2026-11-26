@@ -1,0 +1,53 @@
+# Fabro pipeline
+
+This folder configures [Fabro](https://docs.fabro.sh) for this repository. It
+is the same pipeline as in `0x0pointer/Construct`; see `.fabro/README.md`
+there for the full description, the guardrails and the server setup.
+
+| Workflow | What it does |
+|---|---|
+| `workflows/issue-to-pr/` | Builds an issue a maintainer labelled `fabro-approved`: spec, human approval of the spec, code, checks, one independent review (standard, or security for sensitive changes), draft pull request. |
+| `workflows/fix-ci/` | Repairs a Fabro pull request whose CI checks failed, on the same branch. At most three rounds per pull request. |
+
+Both are started by their Fabro automation (on a schedule, or with the Run
+button in the web UI). A run picks the oldest approved issue, or the oldest
+Fabro pull request with failed checks, and does nothing when there is none.
+
+Issues are built one at a time. Labels on an issue show its state:
+`fabro-approved` (released by a maintainer, waiting), `fabro-in-progress`
+(being built, nothing else starts), `fabro-built` (see the draft pull
+request), `fabro-failed` (the run ended without a change). Remove
+`fabro-built` or `fabro-failed` to have an issue built again. If a run was
+killed and `fabro-in-progress` stayed behind, remove it by hand.
+
+## What is specific to this repository
+
+`workflow.fabro` is identical in every repository that uses the pipeline.
+Everything repository-specific is in the two `workflow.toml` files (keep them
+in step with each other) and in `docker/Dockerfile`:
+
+- how to install, lint and test (`install_command`, `lint_command`, `test_command`);
+- which paths a run may never change (`protected_prefixes`, `protected_files`);
+- who may release an issue (`maintainers`);
+- which changed paths send a change to the security reviewer (`sensitive_paths`).
+
+`skills/` in this folder holds the Trail of Bits `differential-review` skill
+that the security reviewer follows; `skills/README.md` there gives its source
+and license.
+
+The local check is the unit test suite (`python3 -m pytest -q`), the same one
+CI runs. It uses a fake embedder, so the sandbox carries neither `fastembed`
+nor an embedding model: building a real index, real queries and the retrieval
+benchmark cannot be run there.
+
+## Sandbox image
+
+Runs execute in a Docker image built on the machine that hosts Fabro:
+
+```bash
+docker build -f .fabro/docker/Dockerfile -t source-fabro:latest .
+```
+
+Rebuild it when the dependencies change.
+
+No secrets belong in any file under `.fabro/`.
