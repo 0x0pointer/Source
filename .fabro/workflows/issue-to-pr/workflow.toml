@@ -56,7 +56,7 @@ tests_dir = "tests/"
 
 # --- This repository --------------------------------------------------------
 repo_owner = "0x0pointer"
-repo_name = "source"
+repo_name = "Source"
 # Shown to every agent as: the <owner>/<name> repository (<description>).
 repo_description = "Source, a local and offline hybrid search over a folder of Markdown notes, exposed over MCP. Python 3.11+: the engine (chunking, SQLite index, vector and keyword search, reranking) in source_rag.py, the command line tools build_index.py and query.py, the MCP server in mcp_server.py, the retrieval benchmark in eval_retrieval.py, tests in tests/, and the sample notes vault in source/"
 # Extra rule appended to the list of paths agents may not touch.
