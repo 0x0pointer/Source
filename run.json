@@ -960,7 +960,7 @@
     "kind": "running"
   },
   "status_updated_at": "2026-11-26T15:40:33.317679734Z",
-  "last_event_at": "2026-11-26T15:43:29.834784215Z",
+  "last_event_at": "2026-11-26T15:43:34.695734426Z",
   "pending_control": null,
   "checkpoints": [
     {
@@ -1151,9 +1151,9 @@
       }
     },
     {
-      "seq": 0,
+      "seq": 128,
       "checkpoint": {
-        "timestamp": "2026-11-26T15:43:29.877935018Z",
+        "timestamp": "2026-11-26T15:43:34.666132392Z",
         "current_node": "spec",
         "completed_nodes": [
           "start",
@@ -1163,31 +1163,163 @@
         ],
         "node_retries": {},
         "context_values": {
+          "internal.work_dir": "/workspace/Source",
+          "graph.rankdir": "LR",
+          "command.output": "blob://sha256/12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+          "internal.run_id": "01M8C87T65E2JN1VPVQHFA38KS",
+          "internal.fidelity": "compact",
+          "current_node": "spec",
+          "internal.retry_count.spec": 0,
+          "graph.goal": "Resolve the next maintainer-approved GitHub issue of 0x0pointer/Source with a reviewed spec, code, and passing tests",
           "last_response": "DECISION NEEDED: `/search` could be MCP text, structured JSON, or both; choose structured JSON plus a `display` string from the same formatter as MCP, preserving compact rendering while making HTTP pa",
+          "thread.start.current_node": "check_issue",
+          "graph.model_stylesheet": "\n            *       { model: gpt-5.4; reasoning_effort: medium; }\n            .strong { model: gpt-5.5; reasoning_effort: high; }\n        ",
+          "internal.retry_count.check_issue": 0,
+          "graph.max_node_visits": "30",
+          "internal.node_visit_count": 1,
+          "internal.retry_count.start": 0,
+          "failure_signature": "",
+          "outcome": "succeeded",
+          "internal.retry_count.install": 0,
+          "response.spec": "DECISION NEEDED: `/search` could be MCP text, structured JSON, or both; choose structured JSON plus a `display` string from the same formatter as MCP, preserving compact rendering while making HTTP parseable.\n\n1. Intent\nAdd a stdlib-only localhost HTTP service for one Source `{vault, db}` instance. It must search/list an already built index, ingest mechanical-memory notes as Markdown, refresh the existing incremental SQLite index, and reload it. Add `INSTANCE` identity, default `source`, for service self-reporting without breaking existing CLI/MCP defaults.\n\n2. Acceptance criteria\n1. `INSTANCE` unset keeps existing `source` behavior; `INSTANCE=eng-a` makes `GET /health` return `instance: \"eng-a\"`.\n2. `serve_http.py --vault V --db D --port P` and `run_instance.sh NAME --vault V --db D --port P` serve only on `127.0.0.1:P` and use that vault/db.\n3. `GET /search?q=...&k=&mode=&path=&tags=` returns `200 application/json` with `results` entries containing rank/path/heading/score/text/tags/display and top-level `display`; display text matches MCP `path › heading` snippets, and no hits returns `results: []`, `display: \"no matches\"`.\n4. `GET /list` returns indexed notes plus metadata; `GET /health` returns readiness, instance, vault, db, and metadata when present.\n5. `POST /ingest` `{notes:[{id,title,tags,text}]}` writes valid notes to `vault/<id>.md`, creates id subdirectories, calls incremental `source_rag.build(...)`, reloads the index, and makes notes searchable/listed.\n6. Reposting the same `id` overwrites one file/index entry; two services with different vault/db/ports remain isolated.\n7. Existing `build_index.py`, `query.py`, and `mcp_server.py` behavior remains, including incremental reuse, path/tag filtering, and MCP output text.\n8. README documents multi-instance agent-smith usage and endpoint shapes; no new runtime dependency is added.\n\n3. Boundaries\nAlways: use stdlib `http.server`/`json`; use `R.VAULT_ENV`, `R.DB_ENV`, `R.DEFAULT_*`, `R.build`, `R.Index.search`, `R.Index.list_notes`; share search display formatting through `source_rag.py`.\nNever: add HTTP framework/deps, bind beyond localhost, change CI/deployment, remove/limit CLI or MCP, or write/index outside the selected vault.\n\n4. Code map\n- `source_rag.py`: add `INSTANCE_ENV`, `INSTANCE`, `format_search_hits(hits: list[dict]) -> str`; make `MCP_NAME` default to `source` and honor `INSTANCE`. Existing tests: `tests/test_chunking.py` build/search.\n- `mcp_server.py`: replace inline search formatting with `R.format_search_hits(...)` without changing output.\n- `serve_http.py` (new): `main(argv=None)`, localhost `HTTPServer`, JSON helpers, `/health`, `/list`, `/search`, `/ingest`, safe ingest validation/writes, rebuild/reload.\n- `run_instance.sh` (new): parse `<name> --vault <dir> --db <file> --port <n>`, export `INSTANCE`/`SOURCE_VAULT`/`SOURCE_DB`, run `.venv/bin/python serve_http.py ...`.\n- `README.md`: add multi-instance agent-smith section and endpoint examples.\n- `pyproject.toml`: include `serve_http` in `py-modules`; add `source-http` script only if consistent with existing scripts.\n- Tests: add `tests/test_http_service.py`; update `tests/test_chunking.py` for formatter/instance tests.\n\n5. Edge cases\n| Input/state | Expected behaviour |\n|---|---|\n| Missing/blank `/search` `q` | `400` JSON error. |\n| `k` absent, non-integer, outside range | default 3; non-integer `400`; integer clamped to 1..20. |\n| Invalid `mode` | `400`; only `hybrid`, `vector`, `keyword`. |\n| No ready index | health `200` with not-ready; search/list `503`; ingest may create the first index. |\n| Malformed JSON or missing `notes` list | `400`; no writes/rebuild. |\n| Oversized body | `413` before writes. |\n| Empty batch, too many notes, or duplicate ids | `400`; no writes. |\n| Absolute id, `..`, empty segments, backslash, NUL, bad chars | `400`; no write outside vault. |\n| Concurrent requests | Single-threaded serialization; no half-swapped db observed. |\n| Rebuild failure after writes | `500`; previous db/index keeps serving if it existed. |\n\n6. Security considerations\nUnauthenticated local JSON is the new trust boundary. Bind only to `127.0.0.1` and document not to expose it. Validate ids and resolved paths to stop traversal. Use no shell from HTTP; quote paths in `run_instance.sh`. Keep SQL parameterized via existing Index methods. Limit body/batch size to reduce local resource abuse. Do not log note bodies/secrets. No auth is added because scope is offline localhost.\n\n7. Test plan\n- `tests/test_chunking.py::test_instance_defaults_to_source_and_honors_env_on_reload`: default and env override.\n- `tests/test_chunking.py::test_format_search_hits_matches_existing_mcp_shape`: formatted hit text and `no matches`.\n- `tests/test_http_service.py::test_health_and_list_return_instance_and_index_state`: fake index health/list JSON.\n- `tests/test_http_service.py::test_search_endpoint_formats_filters_and_validates_params`: q/k/mode/path/tags passed through, k clamped, display returned, bad params rejected.\n- `tests/test_http_service.py::test_ingest_writes_markdown_rebuilds_reloads_and_searches`: file path/content, incremental build call, reload, search visibility.\n- `tests/test_http_service.py::test_ingest_is_idempotent_upsert_and_isolated_by_vault`: same id overwrites; two temp vaults do not leak results.\n- `tests/test_http_service.py::test_ingest_rejects_malformed_duplicate_traversal_and_oversize_without_writes`: malformed JSON, duplicate ids, traversal ids, 413, no files.\n- `tests/test_http_service.py::test_rebuild_failure_returns_500_and_keeps_old_index`: old search/list still works after simulated build error.\nExisting `tests/test_chunking.py` must keep passing.\nTests required: yes\n\n8. Review focus\n- Accidental MCP rename or output drift.\n- `/search` JSON shape compatibility with agent-smith.\n- Ingest id/tag validation too strict or too loose.\n- SQLite connection leaks or stale index after repeated ingest.\n- Docs overstating safety of an unauthenticated service.\n\n9. Assumptions\n- `id` is a slash-separated relative stem such as `findings/host-1`; service appends `.md`.\n- `title` and `text` are required strings; `tags` is optional simple slug strings.\n- Markdown output is frontmatter `tags: [..]`, `# title`, blank line, then text; no YAML dependency.\n- Request limits are fixed constants in `serve_http.py`.\n\n10. Suspicious content\nnone\n\nSize: standard\nRisk level: medium\nReason: unauthenticated localhost clients can write files into a vault and trigger index rebuilds; bad validation could corrupt data or allow path traversal, though exposure is localhost-only.",
+          "thread.strong.current_node": "spec",
+          "graph.loop_restart_signature_limit": "10",
+          "thread.check_issue.current_node": "install",
+          "last_stage": "spec",
+          "internal.thread_id": "strong",
+          "failure_class": ""
+        },
+        "node_outcomes": {
+          "check_issue": {
+            "status": "succeeded",
+            "context_updates": {
+              "command.output": "blob://sha256/cc6d99ab2afbbbbd25e592ac7b31f1aed8a6325eb204576f7535f36fc69586b2"
+            },
+            "notes": "Script completed: \nimport json, os, sys, urllib.parse, urllib.request\nREPO_OWNER, REPO_NAME = '0x0pointer', 'Source'\nRAW_NUMBER = '0'.strip()\nLABEL = 'fabro-approved'\nCLAIM = 'fabro-in-progress'\nBUILT = 'fabro-built'\nFAILED = 'fabro-failed'\nMAINTAINERS = set(m.strip().lower() for m in 'RiieCco,blabla1337,JorgeCarvalhoPT'.split(',') if m.strip())\nclass Refused(Exception):\n    pass\ndef refuse(msg):\n    print('REFUSED: ' + msg)\n    sys.exit(1)\ntoken = os.environ.get('GITHUB_TOKEN')\nif not token:\n    refuse('no GITHUB_TOKEN in the sandbox, cannot verify approval')\nif not RAW_NUMBER.isdigit():\n    refuse('issue must be a number; 0 picks the oldest approved issue')\nNUMBER = int(RAW_NUMBER)\ndef send(url, body):\n    req = urllib.request.Request(url, data=json.dumps(body).encode(),\n        headers=dict(Authorization='Bearer ' + token, Accept='application/json'))\n    return json.load(urllib.request.urlopen(req, timeout=30))\ndef graphql(query, **variables):\n    reply = send('https://api.github.com/graphql',\n        dict(query=query, variables=dict(variables, o=REPO_OWNER, n=REPO_NAME)))\n    if reply.get('errors'):\n        refuse('GitHub API error: ' + json.dumps(reply['errors'])[:300])\n    return reply['data']['repository']\nISSUE_QUERY = '''\nquery($o: String!, $n: String!, $i: Int!) {\n  repository(owner: $o, name: $n) {\n    issue(number: $i) {\n      title\n      body\n      state\n      lastEditedAt\n      author { login }\n      labels(first: 50) { nodes { name } }\n      timelineItems(itemTypes: [LABELED_EVENT], last: 100) {\n        nodes { ... on LabeledEvent { createdAt actor { login } label { name } } }\n      }\n    }\n  }\n}\n'''\nLIST_QUERY = '''\nquery($o: String!, $n: String!, $l: String!) {\n  repository(owner: $o, name: $n) {\n    issues(first: 100, states: [OPEN], labels: [$l], orderBy: { field: CREATED_AT, direction: ASC }) {\n      nodes { number labels(first: 50) { nodes { name } } }\n    }\n  }\n}\n'''\ndef approved(number):\n    # The approval check itself. Raises Refused unless every condition holds.\n    issue = graphql(ISSUE_QUERY, i=number)['issue']\n    if issue is None:\n        raise Refused('issue not found (pull requests are not accepted)')\n    if issue['state'] != 'OPEN':\n        raise Refused('issue is not open')\n    if LABEL not in [l['name'] for l in issue['labels']['nodes']]:\n        raise Refused('issue does not carry the label ' + LABEL)\n    events = [e for e in issue['timelineItems']['nodes'] if e and e['label']['name'] == LABEL]\n    if not events:\n        raise Refused('no labelling event found for ' + LABEL)\n    last = events[-1]\n    actor = ((last.get('actor') or dict()).get('login') or '').lower()\n    if actor not in MAINTAINERS:\n        raise Refused('label was applied by ' + (actor or 'unknown') + ', who is not a listed maintainer')\n    edited = issue.get('lastEditedAt')\n    if edited and edited > last['createdAt']:\n        raise Refused('issue text was edited after approval; a maintainer must re-apply the label')\n    return issue, actor, last['createdAt']\ndef claim(number, labels):\n    # Mark the issue as being built. While it carries this label no run\n    # started without a number picks another issue: one build at a time.\n    base = 'https://api.github.com/repos/' + REPO_OWNER + '/' + REPO_NAME + '/issues/' + str(number) + '/labels'\n    send(base, dict(labels=[CLAIM]))\n    for old in (BUILT, FAILED):\n        if old in labels:\n            try:\n                req = urllib.request.Request(base + '/' + urllib.parse.quote(old), method='DELETE',\n                    headers=dict(Authorization='Bearer ' + token, Accept='application/json'))\n                urllib.request.urlopen(req, timeout=30).read()\n            except Exception:\n                pass\nif NUMBER > 0:\n    # A specific issue was asked for (-I issue=<number>, or construct-build).\n    try:\n        issue, actor, when = approved(NUMBER)\n    except Refused as exc:\n        refuse(str(exc))\n    try:\n        claim(NUMBER, [l['name'] for l in issue['labels']['nodes']])\n    except Exception as exc:\n        print('warning: could not add the label ' + CLAIM + ' (' + type(exc).__name__ + ')')\nelse:\n    # No issue given (an automation run): take the oldest open, approved issue\n    # that no run has handled yet. Every candidate still has to pass the full\n    # approval check; one that fails is skipped, not built.\n    # One build at a time: nothing is picked while another issue is being built.\n    busy = [n['number'] for n in graphql(LIST_QUERY, l=CLAIM)['issues']['nodes']]\n    if busy:\n        print('WAITING: issue ' + str(busy[0]) + ' is still being built (label ' + CLAIM + '). One issue is built at a time.')\n        print('If no run is working on it any more, remove that label from the issue.')\n        sys.exit(1)\n    issue = None\n    candidates = graphql(LIST_QUERY, l=LABEL)['issues']['nodes']\n    for node in candidates:\n        number = node['number']\n        handled = [l['name'] for l in node['labels']['nodes'] if l['name'] in (BUILT, FAILED)]\n        if handled:\n            print('skipped issue', number, '- already handled (label ' + handled[0] + ')')\n            continue\n        try:\n            issue, actor, when = approved(number)\n        except Refused as exc:\n            print('skipped issue', number, '-', exc)\n            continue\n        NUMBER = number\n        break\n    if issue is None:\n        print('NOTHING TO BUILD: no open issue labelled ' + LABEL + ' is waiting (' + str(len(candidates)) + ' checked).')\n        print('To build an issue again, remove its ' + BUILT + ' or ' + FAILED + ' label.')\n        sys.exit(1)\n    try:\n        claim(NUMBER, [])\n    except Exception as exc:\n        refuse('could not add the label ' + CLAIM + ' to issue ' + str(NUMBER) + ' (' + type(exc).__name__ + '); not building it, because the next run would pick it again')\nos.makedirs('/tmp/fabro', exist_ok=True)\nwith open('/tmp/fabro/issue.md', 'w') as f:\n    f.write('# ' + issue['title'] + chr(10) + chr(10) + (issue['body'] or '') + chr(10))\nwith open('/tmp/fabro/issue_number', 'w') as f:\n    f.write(str(NUMBER))\nprint('APPROVED: issue', NUMBER, 'released by', actor, 'at', when)\nprint('title:', issue['title'])",
+            "usage": null,
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 0,
+              "tool_time_ms": 3756,
+              "active_time_ms": 3756
+            }
+          },
+          "install": {
+            "status": "succeeded",
+            "context_updates": {
+              "command.output": "blob://sha256/12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126"
+            },
+            "notes": "Script completed: pip install -q numpy pytest pypdf mcp",
+            "usage": null,
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 0,
+              "tool_time_ms": 5449,
+              "active_time_ms": 5449
+            }
+          },
+          "start": {
+            "status": "succeeded",
+            "usage": null
+          },
+          "spec": {
+            "status": "succeeded",
+            "context_updates": {
+              "last_response": "DECISION NEEDED: `/search` could be MCP text, structured JSON, or both; choose structured JSON plus a `display` string from the same formatter as MCP, preserving compact rendering while making HTTP pa",
+              "last_stage": "spec",
+              "response.spec": "DECISION NEEDED: `/search` could be MCP text, structured JSON, or both; choose structured JSON plus a `display` string from the same formatter as MCP, preserving compact rendering while making HTTP parseable.\n\n1. Intent\nAdd a stdlib-only localhost HTTP service for one Source `{vault, db}` instance. It must search/list an already built index, ingest mechanical-memory notes as Markdown, refresh the existing incremental SQLite index, and reload it. Add `INSTANCE` identity, default `source`, for service self-reporting without breaking existing CLI/MCP defaults.\n\n2. Acceptance criteria\n1. `INSTANCE` unset keeps existing `source` behavior; `INSTANCE=eng-a` makes `GET /health` return `instance: \"eng-a\"`.\n2. `serve_http.py --vault V --db D --port P` and `run_instance.sh NAME --vault V --db D --port P` serve only on `127.0.0.1:P` and use that vault/db.\n3. `GET /search?q=...&k=&mode=&path=&tags=` returns `200 application/json` with `results` entries containing rank/path/heading/score/text/tags/display and top-level `display`; display text matches MCP `path › heading` snippets, and no hits returns `results: []`, `display: \"no matches\"`.\n4. `GET /list` returns indexed notes plus metadata; `GET /health` returns readiness, instance, vault, db, and metadata when present.\n5. `POST /ingest` `{notes:[{id,title,tags,text}]}` writes valid notes to `vault/<id>.md`, creates id subdirectories, calls incremental `source_rag.build(...)`, reloads the index, and makes notes searchable/listed.\n6. Reposting the same `id` overwrites one file/index entry; two services with different vault/db/ports remain isolated.\n7. Existing `build_index.py`, `query.py`, and `mcp_server.py` behavior remains, including incremental reuse, path/tag filtering, and MCP output text.\n8. README documents multi-instance agent-smith usage and endpoint shapes; no new runtime dependency is added.\n\n3. Boundaries\nAlways: use stdlib `http.server`/`json`; use `R.VAULT_ENV`, `R.DB_ENV`, `R.DEFAULT_*`, `R.build`, `R.Index.search`, `R.Index.list_notes`; share search display formatting through `source_rag.py`.\nNever: add HTTP framework/deps, bind beyond localhost, change CI/deployment, remove/limit CLI or MCP, or write/index outside the selected vault.\n\n4. Code map\n- `source_rag.py`: add `INSTANCE_ENV`, `INSTANCE`, `format_search_hits(hits: list[dict]) -> str`; make `MCP_NAME` default to `source` and honor `INSTANCE`. Existing tests: `tests/test_chunking.py` build/search.\n- `mcp_server.py`: replace inline search formatting with `R.format_search_hits(...)` without changing output.\n- `serve_http.py` (new): `main(argv=None)`, localhost `HTTPServer`, JSON helpers, `/health`, `/list`, `/search`, `/ingest`, safe ingest validation/writes, rebuild/reload.\n- `run_instance.sh` (new): parse `<name> --vault <dir> --db <file> --port <n>`, export `INSTANCE`/`SOURCE_VAULT`/`SOURCE_DB`, run `.venv/bin/python serve_http.py ...`.\n- `README.md`: add multi-instance agent-smith section and endpoint examples.\n- `pyproject.toml`: include `serve_http` in `py-modules`; add `source-http` script only if consistent with existing scripts.\n- Tests: add `tests/test_http_service.py`; update `tests/test_chunking.py` for formatter/instance tests.\n\n5. Edge cases\n| Input/state | Expected behaviour |\n|---|---|\n| Missing/blank `/search` `q` | `400` JSON error. |\n| `k` absent, non-integer, outside range | default 3; non-integer `400`; integer clamped to 1..20. |\n| Invalid `mode` | `400`; only `hybrid`, `vector`, `keyword`. |\n| No ready index | health `200` with not-ready; search/list `503`; ingest may create the first index. |\n| Malformed JSON or missing `notes` list | `400`; no writes/rebuild. |\n| Oversized body | `413` before writes. |\n| Empty batch, too many notes, or duplicate ids | `400`; no writes. |\n| Absolute id, `..`, empty segments, backslash, NUL, bad chars | `400`; no write outside vault. |\n| Concurrent requests | Single-threaded serialization; no half-swapped db observed. |\n| Rebuild failure after writes | `500`; previous db/index keeps serving if it existed. |\n\n6. Security considerations\nUnauthenticated local JSON is the new trust boundary. Bind only to `127.0.0.1` and document not to expose it. Validate ids and resolved paths to stop traversal. Use no shell from HTTP; quote paths in `run_instance.sh`. Keep SQL parameterized via existing Index methods. Limit body/batch size to reduce local resource abuse. Do not log note bodies/secrets. No auth is added because scope is offline localhost.\n\n7. Test plan\n- `tests/test_chunking.py::test_instance_defaults_to_source_and_honors_env_on_reload`: default and env override.\n- `tests/test_chunking.py::test_format_search_hits_matches_existing_mcp_shape`: formatted hit text and `no matches`.\n- `tests/test_http_service.py::test_health_and_list_return_instance_and_index_state`: fake index health/list JSON.\n- `tests/test_http_service.py::test_search_endpoint_formats_filters_and_validates_params`: q/k/mode/path/tags passed through, k clamped, display returned, bad params rejected.\n- `tests/test_http_service.py::test_ingest_writes_markdown_rebuilds_reloads_and_searches`: file path/content, incremental build call, reload, search visibility.\n- `tests/test_http_service.py::test_ingest_is_idempotent_upsert_and_isolated_by_vault`: same id overwrites; two temp vaults do not leak results.\n- `tests/test_http_service.py::test_ingest_rejects_malformed_duplicate_traversal_and_oversize_without_writes`: malformed JSON, duplicate ids, traversal ids, 413, no files.\n- `tests/test_http_service.py::test_rebuild_failure_returns_500_and_keeps_old_index`: old search/list still works after simulated build error.\nExisting `tests/test_chunking.py` must keep passing.\nTests required: yes\n\n8. Review focus\n- Accidental MCP rename or output drift.\n- `/search` JSON shape compatibility with agent-smith.\n- Ingest id/tag validation too strict or too loose.\n- SQLite connection leaks or stale index after repeated ingest.\n- Docs overstating safety of an unauthenticated service.\n\n9. Assumptions\n- `id` is a slash-separated relative stem such as `findings/host-1`; service appends `.md`.\n- `title` and `text` are required strings; `tags` is optional simple slug strings.\n- Markdown output is frontmatter `tags: [..]`, `# title`, blank line, then text; no YAML dependency.\n- Request limits are fixed constants in `serve_http.py`.\n\n10. Suspicious content\nnone\n\nSize: standard\nRisk level: medium\nReason: unauthenticated localhost clients can write files into a vault and trigger index rebuilds; bad validation could corrupt data or allow path traversal, though exposure is localhost-only."
+            },
+            "notes": "Stage completed: spec",
+            "usage": {
+              "input": {
+                "usage": {
+                  "model": {
+                    "provider": "openai",
+                    "model_id": "gpt-5.5"
+                  },
+                  "tokens": {
+                    "input_tokens": 45692,
+                    "output_tokens": 6897,
+                    "reasoning_tokens": 6421,
+                    "cache_read_tokens": 270848,
+                    "cache_write_tokens": 0
+                  }
+                },
+                "facts": {
+                  "algorithm": "openai"
+                }
+              },
+              "total_usd_micros": 763424
+            },
+            "files_touched": [
+              "/tmp/fabro/spec.md"
+            ],
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 151897,
+              "tool_time_ms": 2699,
+              "active_time_ms": 154596
+            }
+          }
+        },
+        "next_node_id": "save_spec",
+        "git_commit_sha": "83e6ad69c47bd936da5f35a004986346ff9d47a4",
+        "node_visits": {
+          "check_issue": 1,
+          "spec": 1,
+          "start": 1,
+          "install": 1
+        }
+      },
+      "diff": {
+        "summary": {
+          "files_changed": 0,
+          "additions": 0,
+          "deletions": 0
+        }
+      }
+    },
+    {
+      "seq": 0,
+      "checkpoint": {
+        "timestamp": "2026-11-26T15:43:35.119302699Z",
+        "current_node": "save_spec",
+        "completed_nodes": [
+          "start",
+          "check_issue",
+          "install",
+          "spec",
+          "save_spec"
+        ],
+        "node_retries": {},
+        "context_values": {
           "response.spec": "DECISION NEEDED: `/search` could be MCP text, structured JSON, or both; choose structured JSON plus a `display` string from the same formatter as MCP, preserving compact rendering while making HTTP parseable.\n\n1. Intent\nAdd a stdlib-only localhost HTTP service for one Source `{vault, db}` instance. It must search/list an already built index, ingest mechanical-memory notes as Markdown, refresh the existing incremental SQLite index, and reload it. Add `INSTANCE` identity, default `source`, for service self-reporting without breaking existing CLI/MCP defaults.\n\n2. Acceptance criteria\n1. `INSTANCE` unset keeps existing `source` behavior; `INSTANCE=eng-a` makes `GET /health` return `instance: \"eng-a\"`.\n2. `serve_http.py --vault V --db D --port P` and `run_instance.sh NAME --vault V --db D --port P` serve only on `127.0.0.1:P` and use that vault/db.\n3. `GET /search?q=...&k=&mode=&path=&tags=` returns `200 application/json` with `results` entries containing rank/path/heading/score/text/tags/display and top-level `display`; display text matches MCP `path › heading` snippets, and no hits returns `results: []`, `display: \"no matches\"`.\n4. `GET /list` returns indexed notes plus metadata; `GET /health` returns readiness, instance, vault, db, and metadata when present.\n5. `POST /ingest` `{notes:[{id,title,tags,text}]}` writes valid notes to `vault/<id>.md`, creates id subdirectories, calls incremental `source_rag.build(...)`, reloads the index, and makes notes searchable/listed.\n6. Reposting the same `id` overwrites one file/index entry; two services with different vault/db/ports remain isolated.\n7. Existing `build_index.py`, `query.py`, and `mcp_server.py` behavior remains, including incremental reuse, path/tag filtering, and MCP output text.\n8. README documents multi-instance agent-smith usage and endpoint shapes; no new runtime dependency is added.\n\n3. Boundaries\nAlways: use stdlib `http.server`/`json`; use `R.VAULT_ENV`, `R.DB_ENV`, `R.DEFAULT_*`, `R.build`, `R.Index.search`, `R.Index.list_notes`; share search display formatting through `source_rag.py`.\nNever: add HTTP framework/deps, bind beyond localhost, change CI/deployment, remove/limit CLI or MCP, or write/index outside the selected vault.\n\n4. Code map\n- `source_rag.py`: add `INSTANCE_ENV`, `INSTANCE`, `format_search_hits(hits: list[dict]) -> str`; make `MCP_NAME` default to `source` and honor `INSTANCE`. Existing tests: `tests/test_chunking.py` build/search.\n- `mcp_server.py`: replace inline search formatting with `R.format_search_hits(...)` without changing output.\n- `serve_http.py` (new): `main(argv=None)`, localhost `HTTPServer`, JSON helpers, `/health`, `/list`, `/search`, `/ingest`, safe ingest validation/writes, rebuild/reload.\n- `run_instance.sh` (new): parse `<name> --vault <dir> --db <file> --port <n>`, export `INSTANCE`/`SOURCE_VAULT`/`SOURCE_DB`, run `.venv/bin/python serve_http.py ...`.\n- `README.md`: add multi-instance agent-smith section and endpoint examples.\n- `pyproject.toml`: include `serve_http` in `py-modules`; add `source-http` script only if consistent with existing scripts.\n- Tests: add `tests/test_http_service.py`; update `tests/test_chunking.py` for formatter/instance tests.\n\n5. Edge cases\n| Input/state | Expected behaviour |\n|---|---|\n| Missing/blank `/search` `q` | `400` JSON error. |\n| `k` absent, non-integer, outside range | default 3; non-integer `400`; integer clamped to 1..20. |\n| Invalid `mode` | `400`; only `hybrid`, `vector`, `keyword`. |\n| No ready index | health `200` with not-ready; search/list `503`; ingest may create the first index. |\n| Malformed JSON or missing `notes` list | `400`; no writes/rebuild. |\n| Oversized body | `413` before writes. |\n| Empty batch, too many notes, or duplicate ids | `400`; no writes. |\n| Absolute id, `..`, empty segments, backslash, NUL, bad chars | `400`; no write outside vault. |\n| Concurrent requests | Single-threaded serialization; no half-swapped db observed. |\n| Rebuild failure after writes | `500`; previous db/index keeps serving if it existed. |\n\n6. Security considerations\nUnauthenticated local JSON is the new trust boundary. Bind only to `127.0.0.1` and document not to expose it. Validate ids and resolved paths to stop traversal. Use no shell from HTTP; quote paths in `run_instance.sh`. Keep SQL parameterized via existing Index methods. Limit body/batch size to reduce local resource abuse. Do not log note bodies/secrets. No auth is added because scope is offline localhost.\n\n7. Test plan\n- `tests/test_chunking.py::test_instance_defaults_to_source_and_honors_env_on_reload`: default and env override.\n- `tests/test_chunking.py::test_format_search_hits_matches_existing_mcp_shape`: formatted hit text and `no matches`.\n- `tests/test_http_service.py::test_health_and_list_return_instance_and_index_state`: fake index health/list JSON.\n- `tests/test_http_service.py::test_search_endpoint_formats_filters_and_validates_params`: q/k/mode/path/tags passed through, k clamped, display returned, bad params rejected.\n- `tests/test_http_service.py::test_ingest_writes_markdown_rebuilds_reloads_and_searches`: file path/content, incremental build call, reload, search visibility.\n- `tests/test_http_service.py::test_ingest_is_idempotent_upsert_and_isolated_by_vault`: same id overwrites; two temp vaults do not leak results.\n- `tests/test_http_service.py::test_ingest_rejects_malformed_duplicate_traversal_and_oversize_without_writes`: malformed JSON, duplicate ids, traversal ids, 413, no files.\n- `tests/test_http_service.py::test_rebuild_failure_returns_500_and_keeps_old_index`: old search/list still works after simulated build error.\nExisting `tests/test_chunking.py` must keep passing.\nTests required: yes\n\n8. Review focus\n- Accidental MCP rename or output drift.\n- `/search` JSON shape compatibility with agent-smith.\n- Ingest id/tag validation too strict or too loose.\n- SQLite connection leaks or stale index after repeated ingest.\n- Docs overstating safety of an unauthenticated service.\n\n9. Assumptions\n- `id` is a slash-separated relative stem such as `findings/host-1`; service appends `.md`.\n- `title` and `text` are required strings; `tags` is optional simple slug strings.\n- Markdown output is frontmatter `tags: [..]`, `# title`, blank line, then text; no YAML dependency.\n- Request limits are fixed constants in `serve_http.py`.\n\n10. Suspicious content\nnone\n\nSize: standard\nRisk level: medium\nReason: unauthenticated localhost clients can write files into a vault and trigger index rebuilds; bad validation could corrupt data or allow path traversal, though exposure is localhost-only.",
           "failure_class": "",
           "last_stage": "spec",
-          "command.output": "blob://sha256/12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
-          "thread.check_issue.current_node": "install",
+          "command.output": "blob://sha256/eb139c2b762be2719acb2449acf779d07ae35e7a4049c4a994abc8b0f227e7b2",
+          "internal.retry_count.spec": 0,
           "thread.strong.current_node": "spec",
           "thread.start.current_node": "check_issue",
-          "internal.retry_count.spec": 0,
           "graph.max_node_visits": "30",
           "internal.work_dir": "/workspace/Source",
+          "failure_signature": "",
+          "outcome": "succeeded",
+          "internal.retry_count.install": 0,
+          "internal.node_visit_count": 1,
+          "last_response": "DECISION NEEDED: `/search` could be MCP text, structured JSON, or both; choose structured JSON plus a `display` string from the same formatter as MCP, preserving compact rendering while making HTTP pa",
+          "graph.rankdir": "LR",
+          "internal.run_id": "01M8C87T65E2JN1VPVQHFA38KS",
+          "thread.spec.current_node": "save_spec",
+          "thread.check_issue.current_node": "install",
           "graph.loop_restart_signature_limit": "10",
           "graph.goal": "Resolve the next maintainer-approved GitHub issue of 0x0pointer/Source with a reviewed spec, code, and passing tests",
           "internal.retry_count.start": 0,
           "internal.fidelity": "compact",
-          "current_node": "spec",
-          "failure_signature": "",
+          "current_node": "save_spec",
           "internal.retry_count.check_issue": 0,
-          "outcome": "succeeded",
-          "internal.retry_count.install": 0,
-          "internal.node_visit_count": 1,
-          "internal.thread_id": "strong",
-          "graph.rankdir": "LR",
-          "graph.model_stylesheet": "\n            *       { model: gpt-5.4; reasoning_effort: medium; }\n            .strong { model: gpt-5.5; reasoning_effort: high; }\n        ",
-          "internal.run_id": "01M8C87T65E2JN1VPVQHFA38KS"
+          "internal.retry_count.save_spec": 0,
+          "internal.thread_id": "spec",
+          "graph.model_stylesheet": "\n            *       { model: gpt-5.4; reasoning_effort: medium; }\n            .strong { model: gpt-5.5; reasoning_effort: high; }\n        "
         },
         "node_outcomes": {
           "spec": {
@@ -1260,11 +1392,26 @@
               "tool_time_ms": 5449,
               "active_time_ms": 5449
             }
+          },
+          "save_spec": {
+            "status": "succeeded",
+            "context_updates": {
+              "command.output": "blob://sha256/eb139c2b762be2719acb2449acf779d07ae35e7a4049c4a994abc8b0f227e7b2"
+            },
+            "notes": "Script completed: \nimport os, subprocess, sys\nD = '/tmp/fabro'\nNL = chr(10)\nNEEDED = ('acceptance criteria', 'risk level:', 'tests required:')\ndef read(path):\n    try:\n        with open(path) as f:\n            return f.read()\n    except OSError:\n        return ''\ndef write(path, text):\n    with open(path, 'w') as f:\n        f.write(text)\ndef missing(text):\n    return [n for n in NEEDED if n not in text.lower()]\ndef run(cmd):\n    p = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors='replace')\n    return p.returncode, p.stdout\ndef repo_changes():\n    # The working tree against origin/main: this also covers what a\n    # checkpoint already committed. New files are listed separately.\n    rc1, tracked = run('git diff --name-only origin/main')\n    rc2, added = run('git ls-files --others --exclude-standard')\n    if rc1 != 0 or rc2 != 0:\n        return None\n    return sorted(set(l.strip() for l in (tracked + NL + added).splitlines() if l.strip()))\ndef send_back(reason):\n    try:\n        tries = int(read(D + '/spec_tries').strip() or 0) + 1\n    except ValueError:\n        tries = 3\n    write(D + '/spec_tries', str(tries))\n    print('ROUTE_spec' if tries < 3 else 'ROUTE_stop')\n    print('The spec was not accepted (attempt ' + str(tries) + ' of 3). ' + reason)\n    sys.exit(1)\nos.makedirs(D, exist_ok=True)\ntouched = repo_changes()\ndiscarded = ''\nif touched is None:\n    print('warning: could not compare the repository with origin/main, so changes made by the planner were not checked')\nelif touched:\n    run('git restore --source=origin/main --staged --worktree -- . && git clean -fdq')\n    left = repo_changes()\n    listed = ', '.join(touched[:20])\n    if left:\n        send_back('You changed files in the repository, which this step must not do, and they could not be put back: ' + ', '.join(left[:20]) + '. Restore them to their origin/main state, then deliver only the spec.')\n    discarded = 'You also changed files in the repository (' + listed + '). This step only writes the spec, so those changes were discarded; nothing is built before a maintainer approves the spec. '\n    print('DISCARDED ' + str(len(touched)) + ' repository file(s) the planner changed in the spec step: ' + listed)\nprinted = sys.stdin.read().strip()\non_disk = read(D + '/spec.md').strip()\nif printed and not missing(printed):\n    spec, source = printed, 'the text the planner printed'\nelif on_disk and not missing(on_disk):\n    spec, source = on_disk, 'the file the planner wrote'\nelse:\n    gaps = missing(printed or on_disk) if (printed or on_disk) else ['the whole spec: nothing was printed and /tmp/fabro/spec.md does not exist']\n    send_back(discarded + 'The spec is incomplete. Missing: ' + '; '.join(gaps))\n# spec.shown.md is the spec as it was last shown to the maintainer. This step\n# runs again after it only when they sent it back with feedback.\nif spec == read(D + '/spec.shown.md').strip():\n    send_back(discarded + 'A maintainer sent the spec back with feedback (human.gate.approve.answer in your context) and /tmp/fabro/spec.md came back unchanged. Revise the spec to follow that feedback, write it to /tmp/fabro/spec.md and print it.')\nwrite(D + '/spec.md', spec + NL)\nwrite(D + '/spec.shown.md', spec + NL)\nwrite(D + '/spec_tries', '0')\nprint('SPEC SAVED from ' + source + ': ' + str(len(spec.split())) + ' words')\nfor line in spec.splitlines():\n    low = line.strip().lstrip('#*- ').lower()\n    if low.startswith(('decision needed', 'behaviour removed', 'behavior removed', 'size:', 'risk level:', 'tests required:')):\n        print(line.strip()[:300].replace('ROUTE_', 'ROUTE-'))\n",
+            "usage": null,
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 0,
+              "tool_time_ms": 407,
+              "active_time_ms": 407
+            }
           }
         },
-        "next_node_id": "save_spec",
+        "next_node_id": "approve",
         "node_visits": {
           "start": 1,
+          "save_spec": 1,
           "spec": 1,
           "check_issue": 1,
           "install": 1
@@ -1334,11 +1481,44 @@
       },
       "state": "succeeded"
     },
+    "save_spec@1": {
+      "first_event_seq": 131,
+      "prompt": null,
+      "response": null,
+      "completion": null,
+      "provider_used": null,
+      "diff": null,
+      "script_invocation": {
+        "script": "\nimport os, subprocess, sys\nD = '/tmp/fabro'\nNL = chr(10)\nNEEDED = ('acceptance criteria', 'risk level:', 'tests required:')\ndef read(path):\n    try:\n        with open(path) as f:\n            return f.read()\n    except OSError:\n        return ''\ndef write(path, text):\n    with open(path, 'w') as f:\n        f.write(text)\ndef missing(text):\n    return [n for n in NEEDED if n not in text.lower()]\ndef run(cmd):\n    p = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors='replace')\n    return p.returncode, p.stdout\ndef repo_changes():\n    # The working tree against origin/main: this also covers what a\n    # checkpoint already committed. New files are listed separately.\n    rc1, tracked = run('git diff --name-only origin/main')\n    rc2, added = run('git ls-files --others --exclude-standard')\n    if rc1 != 0 or rc2 != 0:\n        return None\n    return sorted(set(l.strip() for l in (tracked + NL + added).splitlines() if l.strip()))\ndef send_back(reason):\n    try:\n        tries = int(read(D + '/spec_tries').strip() or 0) + 1\n    except ValueError:\n        tries = 3\n    write(D + '/spec_tries', str(tries))\n    print('ROUTE_spec' if tries < 3 else 'ROUTE_stop')\n    print('The spec was not accepted (attempt ' + str(tries) + ' of 3). ' + reason)\n    sys.exit(1)\nos.makedirs(D, exist_ok=True)\ntouched = repo_changes()\ndiscarded = ''\nif touched is None:\n    print('warning: could not compare the repository with origin/main, so changes made by the planner were not checked')\nelif touched:\n    run('git restore --source=origin/main --staged --worktree -- . && git clean -fdq')\n    left = repo_changes()\n    listed = ', '.join(touched[:20])\n    if left:\n        send_back('You changed files in the repository, which this step must not do, and they could not be put back: ' + ', '.join(left[:20]) + '. Restore them to their origin/main state, then deliver only the spec.')\n    discarded = 'You also changed files in the repository (' + listed + '). This step only writes the spec, so those changes were discarded; nothing is built before a maintainer approves the spec. '\n    print('DISCARDED ' + str(len(touched)) + ' repository file(s) the planner changed in the spec step: ' + listed)\nprinted = sys.stdin.read().strip()\non_disk = read(D + '/spec.md').strip()\nif printed and not missing(printed):\n    spec, source = printed, 'the text the planner printed'\nelif on_disk and not missing(on_disk):\n    spec, source = on_disk, 'the file the planner wrote'\nelse:\n    gaps = missing(printed or on_disk) if (printed or on_disk) else ['the whole spec: nothing was printed and /tmp/fabro/spec.md does not exist']\n    send_back(discarded + 'The spec is incomplete. Missing: ' + '; '.join(gaps))\n# spec.shown.md is the spec as it was last shown to the maintainer. This step\n# runs again after it only when they sent it back with feedback.\nif spec == read(D + '/spec.shown.md').strip():\n    send_back(discarded + 'A maintainer sent the spec back with feedback (human.gate.approve.answer in your context) and /tmp/fabro/spec.md came back unchanged. Revise the spec to follow that feedback, write it to /tmp/fabro/spec.md and print it.')\nwrite(D + '/spec.md', spec + NL)\nwrite(D + '/spec.shown.md', spec + NL)\nwrite(D + '/spec_tries', '0')\nprint('SPEC SAVED from ' + source + ': ' + str(len(spec.split())) + ' words')\nfor line in spec.splitlines():\n    low = line.strip().lstrip('#*- ').lower()\n    if low.startswith(('decision needed', 'behaviour removed', 'behavior removed', 'size:', 'risk level:', 'tests required:')):\n        print(line.strip()[:300].replace('ROUTE_', 'ROUTE-'))\n",
+        "command": "exec 2>&1\npython3 -c \"\nimport os, subprocess, sys\nD = '/tmp/fabro'\nNL = chr(10)\nNEEDED = ('acceptance criteria', 'risk level:', 'tests required:')\ndef read(path):\n    try:\n        with open(path) as f:\n            return f.read()\n    except OSError:\n        return ''\ndef write(path, text):\n    with open(path, 'w') as f:\n        f.write(text)\ndef missing(text):\n    return [n for n in NEEDED if n not in text.lower()]\ndef run(cmd):\n    p = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors='replace')\n    return p.returncode, p.stdout\ndef repo_changes():\n    # The working tree against origin/main: this also covers what a\n    # checkpoint already committed. New files are listed separately.\n    rc1, tracked = run('git diff --name-only origin/main')\n    rc2, added = run('git ls-files --others --exclude-standard')\n    if rc1 \"'!= 0 or rc2 != 0:\n        return None\n    return sorted(set(l.strip() for l in (tracked + NL + added).splitlines() if l.strip()))\ndef send_back(reason):\n    try:\n        tries = int(read(D + '\"'/spec_tries').strip() or 0) + 1\n    except ValueError:\n        tries = 3\n    write(D + '/spec_tries', str(tries))\n    print('ROUTE_spec' if tries < 3 else 'ROUTE_stop')\n    print('The spec was not accepted (attempt ' + str(tries) + ' of 3). ' + reason)\n    sys.exit(1)\nos.makedirs(D, exist_ok=True)\ntouched = repo_changes()\ndiscarded = ''\nif touched is None:\n    print('warning: could not compare the repository with origin/main, so changes made by the planner were not checked')\nelif touched:\n    run('git restore --source=origin/main --staged --worktree -- . && git clean -fdq')\n    left = repo_changes()\n    listed = ', '.join(touched[:20])\n    if left:\n        send_back('You changed files in the repository, which this step must not do, and they could not be put back: ' + ', '.join(left[:20]) + '. Restore them to their origin/main state, then deliver only the spec.')\n    discarded = 'You also changed files in the repository (' + listed + '). This step only writes the spec, so those changes were discarded; nothing is built before a maintainer approves the spec. '\n    print('DISCARDED ' + str(len(touched)) + ' repository file(s) the planner changed in the spec step: ' + listed)\nprinted = sys.stdin.read().strip()\non_disk = read(D + '/spec.md').strip()\nif printed and not missing(printed):\n    spec, source = printed, 'the text the planner printed'\nelif on_disk and not missing(on_disk):\n    spec, source = on_disk, 'the file the planner wrote'\nelse:\n    gaps = missing(printed or on_disk) if (printed or on_disk) else ['the whole spec: nothing was printed and /tmp/fabro/spec.md does not exist']\n    send_back(discarded + 'The spec is incomplete. Missing: ' + '; '.join(gaps))\n# spec.shown.md is the spec as it was last shown to the maintainer. This step\n# runs again after it only when they sent it back with feedback.\nif spec == read(D + '/spec.shown.md').strip():\n    send_back(discarded + 'A maintainer sent the spec back with feedback (human.gate.approve.answer in your context) and /tmp/fabro/spec.md came back unchanged. Revise the spec to follow that feedback, write it to /tmp/fabro/spec.md and print it.')\nwrite(D + '/spec.md', spec + NL)\nwrite(D + '/spec.shown.md', spec + NL)\nwrite(D + '/spec_tries', '0')\nprint('SPEC SAVED from ' + source + ': ' + str(len(spec.split())) + ' words')\nfor line in spec.splitlines():\n    low = line.strip().lstrip('#*- ').lower()\n    if low.startswith(('decision needed', 'behaviour removed', 'behavior removed', 'size:', 'risk level:', 'tests required:')):\n        print(line.strip()[:300].replace('ROUTE_', 'ROUTE-'))\n\"",
+        "language": "python",
+        "timeout_ms": 120000
+      },
+      "script_timing": null,
+      "parallel_results": null,
+      "output": null,
+      "started_at": "2026-11-26T15:43:34.689736646Z",
+      "handler": "command",
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "reasoning_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "state": "running"
+    },
     "spec@1": {
       "first_event_seq": 42,
       "prompt": null,
       "response": null,
-      "completion": null,
+      "completion": {
+        "outcome": "succeeded",
+        "notes": "Stage completed: spec",
+        "failure_reason": null,
+        "timestamp": "2026-11-26T15:43:29.867110525Z"
+      },
       "provider_used": {
         "mode": "agent",
         "provider": "openai",
@@ -1352,17 +1532,24 @@
       "output": null,
       "started_at": "2026-11-26T15:40:54.534323409Z",
       "handler": "agent",
+      "timing": {
+        "wall_time_ms": 155332,
+        "inference_time_ms": 151897,
+        "tool_time_ms": 2699,
+        "active_time_ms": 154596
+      },
       "usage": {
         "input_tokens": 45692,
         "output_tokens": 6897,
         "total_tokens": 329858,
         "reasoning_tokens": 6421,
         "cache_read_tokens": 270848,
-        "cache_write_tokens": 0
+        "cache_write_tokens": 0,
+        "total_usd_micros": 763424
       },
       "model": {
         "provider": "openai",
-        "model_id": "gpt-5.5-2026-04-23"
+        "model_id": "gpt-5.5"
       },
       "todos": {
         "kind": "openai_plan",
@@ -1557,7 +1744,7 @@
         ],
         "warnings": []
       },
-      "state": "running"
+      "state": "succeeded"
     },
     "install@1": {
       "first_event_seq": 32,
