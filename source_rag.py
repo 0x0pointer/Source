@@ -40,7 +40,9 @@ DEFAULT_VAULT = HERE / BRAND
 DEFAULT_MODELS = HERE / "models"
 VAULT_ENV = f"{BRAND.upper()}_VAULT"
 DB_ENV = f"{BRAND.upper()}_DB"
-MCP_NAME = BRAND
+INSTANCE_ENV = "INSTANCE"
+INSTANCE = (os.environ.get(INSTANCE_ENV, BRAND) or BRAND).strip() or BRAND
+MCP_NAME = INSTANCE
 
 DEFAULT_MODEL = "BAAI/bge-small-en-v1.5"   # 384-dim, ~64 MB, fast on CPU
 DEFAULT_RERANKER = "Xenova/ms-marco-MiniLM-L-6-v2"   # cross-encoder, ~80 MB; "none" disables
@@ -210,6 +212,16 @@ def embed_input(c: Chunk) -> str:
     """What gets embedded: file + heading trail give each chunk its context."""
     title = Path(c.path).stem.replace("-", " ").replace("_", " ")
     return f"{title} — {c.heading}\n\n{c.text}" if c.heading else f"{title}\n\n{c.text}"
+
+
+def format_search_hit(hit: dict, rank: int) -> str:
+    return f"### [{rank}] {hit['path']} › {hit['heading'] or '(top)'}  (score {hit['score']})\n{hit['text']}"
+
+
+def format_search_hits(hits: list[dict]) -> str:
+    if not hits:
+        return "no matches"
+    return "\n\n".join(format_search_hit(hit, i) for i, hit in enumerate(hits, 1))
 
 
 # ───────────────────────────── embedding ─────────────────────────────
@@ -396,6 +408,9 @@ class Index:
         self.emb = embedder or Embedder(self.meta["model"], cache_dir, offline=offline)
         rr = self.meta.get("reranker", "none")   # older indexes have no reranker entry
         self.reranker = Reranker(rr, cache_dir, offline=offline) if rr != "none" and embedder is None else None
+
+    def close(self):
+        self.con.close()
 
     def _vector(self, q: str, k: int) -> list[int]:
         scores = self.mat @ self.emb.query(q)

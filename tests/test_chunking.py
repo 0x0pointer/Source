@@ -4,6 +4,7 @@ A FakeEmbedder (deterministic, no fastembed) lets us exercise the real build / i
 / search / tag-filter code paths too, so these run anywhere numpy + pytest are installed —
 no model download, no onnxruntime.
 """
+import importlib
 import hashlib
 
 import numpy as np
@@ -97,6 +98,34 @@ def test_chunk_file_drops_tiny_sections(tmp_path):
 def test_embed_input_uses_title_and_heading():
     c = R.Chunk("refs/my-note.md", "Some Heading", "the body")
     assert R.embed_input(c).startswith("my note — Some Heading")
+
+
+def test_instance_defaults_to_source_and_honors_env_on_reload(monkeypatch):
+    monkeypatch.delenv("INSTANCE", raising=False)
+    reloaded = importlib.reload(R)
+    assert reloaded.INSTANCE == "source"
+    assert reloaded.MCP_NAME == "source"
+
+    monkeypatch.setenv("INSTANCE", "eng-a")
+    reloaded = importlib.reload(R)
+    assert reloaded.INSTANCE == "eng-a"
+    assert reloaded.MCP_NAME == "eng-a"
+
+    monkeypatch.delenv("INSTANCE", raising=False)
+    importlib.reload(R)
+
+
+def test_format_search_hits_matches_existing_mcp_shape():
+    hits = [
+        {"path": "guide.md", "heading": "Guide", "score": 12.34, "text": "First result", "tags": "alpha"},
+        {"path": "notes/top.md", "heading": "", "score": 8.0, "text": "Second result", "tags": ""},
+    ]
+
+    assert R.format_search_hits(hits) == (
+        "### [1] guide.md › Guide  (score 12.34)\nFirst result\n\n"
+        "### [2] notes/top.md › (top)  (score 8.0)\nSecond result"
+    )
+    assert R.format_search_hits([]) == "no matches"
 
 
 # ───────────────────────── build + search (fake embedder) ─────────────────────────

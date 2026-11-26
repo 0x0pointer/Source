@@ -49,13 +49,14 @@ make build                              # downloads models once (~152 MB), then 
 make query Q="how do I verify a fix worked"
 ```
 
-Prefer to do it by hand, or want the `source-build` / `source-query` commands on your PATH?
+Prefer to do it by hand, or want the `source-build` / `source-query` / `source-http` commands on your PATH?
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -e .              # installs the package + the two console scripts
+.venv/bin/pip install -e .              # installs the package + the console scripts
 .venv/bin/source-build
 .venv/bin/source-query "how do I verify a fix worked"
+.venv/bin/source-http --port 7801
 ```
 
 If your platform blocks system-wide `pip install` (e.g. Debian/Kali PEP 668), always run things
@@ -88,6 +89,61 @@ claude mcp list                         # should show source ✓ connected
 
 Then start a new session and ask something like *"check my notes for how to reproduce a flaky bug"*.
 The agent calls `search_notes` by itself.
+
+### Run multiple localhost instances for agent-smith
+
+Source can also expose one `{vault, db}` pair over a tiny stdlib-only HTTP server, so agent-smith can
+bind a different Source instance per engagement or environment.
+
+> **Local trust boundary only:** `serve_http.py` binds to `127.0.0.1` on purpose. Do not expose it on a
+> network interface; it has no authentication and `/ingest` can write notes into the selected vault.
+
+Run one instance directly:
+
+```bash
+.venv/bin/python serve_http.py \
+  --vault ~/engagements/acme/source \
+  --db ~/engagements/acme/index/source.sqlite \
+  --port 7801
+```
+
+Or use the helper that sets `INSTANCE`, `SOURCE_VAULT`, and `SOURCE_DB` for you:
+
+```bash
+./run_instance.sh acme-prod \
+  --vault ~/engagements/acme/source \
+  --db ~/engagements/acme/index/source.sqlite \
+  --port 7801
+
+./run_instance.sh acme-stage \
+  --vault ~/engagements/acme-stage/source \
+  --db ~/engagements/acme-stage/index/source.sqlite \
+  --port 7802
+```
+
+agent-smith can then map `acme-prod -> http://127.0.0.1:7801` and
+`acme-stage -> http://127.0.0.1:7802` in its own `sources.yaml`.
+
+Endpoint shapes:
+
+```http
+GET /health
+=> {"ready":true,"instance":"acme-prod","vault":"/...","db":"/...","meta":{...}}
+
+GET /list
+=> {"ready":true,"instance":"acme-prod","vault":"/...","db":"/...","meta":{...},
+    "notes":[{"path":"findings/host-1.md","chunks":1}]}
+
+GET /search?q=ssrf&k=3&mode=keyword&path=findings&tags=finding,critical
+=> {"results":[{"rank":1,"path":"findings/host-1.md","heading":"Host 1","score":7.5,
+                "text":"SSRF on the admin endpoint.","tags":"finding critical",
+                "display":"### [1] findings/host-1.md › Host 1  (score 7.5)\nSSRF on the admin endpoint."}],
+    "display":"### [1] findings/host-1.md › Host 1  (score 7.5)\nSSRF on the admin endpoint."}
+
+POST /ingest
+{"notes":[{"id":"findings/host-1","title":"Host 1","tags":["finding"],"text":"SSRF on the admin endpoint."}]}
+=> writes `vault/findings/host-1.md`, incrementally rebuilds the index, and reloads it in-place
+```
 
 ## Usage
 
@@ -124,6 +180,9 @@ chunks whose frontmatter tags include all of the given tags.
 
 The MCP server loads the index on first use. Restart the agent session (or `/mcp` → reconnect in
 Claude Code) to pick up a rebuilt index.
+
+`serve_http.py` reloads its index after every successful `/ingest`, so new notes become searchable
+without restarting the process.
 
 ### Tagging notes
 
@@ -176,6 +235,7 @@ numbers before trusting any single configuration.
 | Embedding model | `--model NAME` (any fastembed text model) | `BAAI/bge-small-en-v1.5` |
 | Reranker | `--reranker NAME`, or `none` to disable | `Xenova/ms-marco-MiniLM-L-6-v2` |
 | Index location | `build_index.py --db PATH`, `SOURCE_DB=` for the MCP server | `./index/source.sqlite` |
+| Instance name | `INSTANCE=` (used by MCP and `/health`) | `source` |
 
 The models are recorded in the index, and queries always use the ones the index was built with.
 Changing a model therefore means a full rebuild (the incremental cache invalidates automatically).
@@ -191,6 +251,8 @@ source_rag.py        everything: chunking, embedding, SQLite index, hybrid searc
 build_index.py       builds index/source.sqlite (incremental; --full, --watch)
 query.py             terminal search (--mode, --path, --tag, --list)
 mcp_server.py        MCP server (stdio) for Claude Code / opencode
+serve_http.py        stdlib localhost HTTP service (/health, /list, /search, /ingest)
+run_instance.sh      helper to launch one named HTTP instance under .venv
 eval_retrieval.py    quality benchmark
 eval/questions.json  the benchmark's questions with expected answers
 tests/               unit tests (run without the ML deps, via a fake embedder)

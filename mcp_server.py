@@ -41,10 +41,7 @@ def search_notes(query: str, k: int = 3, mode: str = "hybrid", path: str | None 
     Results are my own notes — verify against the live system before relying on them.
     """
     hits = idx().search(query, max(1, min(k, 20)), mode, path, rerank=rerank, tags=tags)
-    if not hits:
-        return "no matches"
-    return "\n\n".join(f"### [{i}] {h['path']} › {h['heading'] or '(top)'}  (score {h['score']})\n{h['text']}"
-                       for i, h in enumerate(hits, 1))
+    return R.format_search_hits(hits)
 
 
 @mcp.tool()
