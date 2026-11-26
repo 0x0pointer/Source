@@ -21,10 +21,11 @@ dev = ["pytest>=8"]
 # `pip install -e .` puts these on your PATH (an alternative to `.venv/bin/python build_index.py`).
 [project.scripts]
 source-build = "build_index:main"
+source-http = "serve_http:main"
 source-query = "query:main"
 
 [tool.setuptools]
-py-modules = ["source_rag", "build_index", "query", "mcp_server", "eval_retrieval"]
+py-modules = ["source_rag", "build_index", "query", "mcp_server", "serve_http", "eval_retrieval"]
 
 [tool.pytest.ini_options]
 addopts = "-q"
