@@ -266,6 +266,83 @@ def test_ingest_is_idempotent_upsert_and_isolated_by_vault(tmp_path, serve_http_
         request_json(f"{url_b}/search?q=Updated", expect_status=503)
 
 
+def test_ingest_requires_application_json_and_avoids_writes_or_rebuild(tmp_path, serve_http_module):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    db = tmp_path / "idx.sqlite"
+    build_calls = []
+
+    def builder(*args, **kwargs):
+        build_calls.append((args, kwargs))
+        return {"files": 0, "chunks": 0}
+
+    state = serve_http_module.ServiceState(vault=vault, db_path=db, builder=builder)
+
+    with running_server(serve_http_module, state) as base_url:
+        body = json.dumps({
+            "notes": [{"id": "plain", "title": "Plain", "text": "browser simple request"}]
+        }).encode()
+        for headers in ({}, {"Content-Type": "text/plain; charset=utf-8"}):
+            req = urllib.request.Request(
+                f"{base_url}/ingest",
+                data=body,
+                headers=headers,
+                method="POST",
+            )
+            with pytest.raises(urllib.error.HTTPError) as excinfo:
+                urllib.request.urlopen(req, timeout=5)
+            assert excinfo.value.code == 415
+
+    assert build_calls == []
+    assert list(vault.rglob("*.md")) == []
+
+
+def test_ingest_accepts_dotted_ids_and_rejects_duplicate_targets(tmp_path, serve_http_module):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "real").mkdir()
+    (vault / "alias").symlink_to(vault / "real", target_is_directory=True)
+    db = tmp_path / "idx.sqlite"
+    build_calls = []
+
+    def builder(selected_vault, selected_db, model, exts, cache_dir, *, log, reranker, full=False):
+        build_calls.append(selected_vault)
+        return R.build(selected_vault, selected_db, model, exts, cache_dir,
+                       log=log, reranker="none", full=full, embedder=FakeEmbedder())
+
+    state = serve_http_module.ServiceState(
+        vault=vault,
+        db_path=db,
+        builder=builder,
+        index_factory=lambda path: R.Index(path, embedder=FakeEmbedder()),
+        reranker="none",
+    )
+
+    with running_server(serve_http_module, state) as base_url:
+        request_json(
+            f"{base_url}/ingest",
+            method="POST",
+            payload={"notes": [{"id": "releases/v1.2", "title": "Version 1.2", "text": "Dotted id works."}]},
+        )
+        assert (vault / "releases" / "v1.2.md").read_text().endswith("Dotted id works.\n")
+        assert not (vault / "releases" / "v1.md").exists()
+
+        request_json(
+            f"{base_url}/ingest",
+            method="POST",
+            payload={
+                "notes": [
+                    {"id": "real/note", "title": "First", "text": "one"},
+                    {"id": "alias/note", "title": "Second", "text": "two"},
+                ]
+            },
+            expect_status=400,
+        )
+
+    assert len(build_calls) == 1
+    assert not (vault / "real" / "note.md").exists()
+
+
 def test_ingest_rejects_malformed_duplicate_traversal_and_oversize_without_writes(tmp_path, serve_http_module):
     vault = tmp_path / "vault"
     vault.mkdir()

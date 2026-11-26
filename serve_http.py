@@ -108,6 +108,9 @@ def make_server(state: ServiceState, *, host: str = HOST, port: int = 8000) -> H
         def _error(self, status: int, message: str):
             self._send_json(status, {"error": message})
 
+        def _json_media_type(self) -> str:
+            return self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+
         def _read_json(self):
             raw_len = self.headers.get("Content-Length")
             if raw_len is not None:
@@ -202,6 +205,9 @@ def make_server(state: ServiceState, *, host: str = HOST, port: int = 8000) -> H
             if parsed.path != "/ingest":
                 self._error(HTTPStatus.NOT_FOUND, "not found")
                 return
+            if self._json_media_type() != "application/json":
+                self._error(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "Content-Type must be application/json")
+                return
             try:
                 payload = self._read_json()
             except OverflowError as exc:
@@ -248,6 +254,7 @@ def make_server(state: ServiceState, *, host: str = HOST, port: int = 8000) -> H
 
 def validate_notes(notes: list[dict], vault: Path) -> list[tuple[Path, dict]]:
     seen_ids = set()
+    seen_paths = set()
     out = []
     for note in notes:
         if not isinstance(note, dict):
@@ -270,6 +277,9 @@ def validate_notes(notes: list[dict], vault: Path) -> list[tuple[Path, dict]]:
         if not isinstance(tags, list) or not all(isinstance(tag, str) and valid_tag(tag) for tag in tags):
             raise ValueError("note tags must be slug strings")
         note_path = note_path_for_id(vault, note_id)
+        if note_path in seen_paths:
+            raise ValueError("duplicate note targets")
+        seen_paths.add(note_path)
         out.append((note_path, {"id": note_id, "title": title.strip(), "text": text, "tags": tags}))
     return out
 
@@ -281,16 +291,15 @@ def valid_tag(tag: str) -> bool:
 def note_path_for_id(vault: Path, note_id: str) -> Path:
     if "\\" in note_id or "\x00" in note_id:
         raise ValueError("invalid note id")
-    rel = Path(note_id)
-    if rel.is_absolute():
+    if note_id.startswith("/"):
         raise ValueError("invalid note id")
-    parts = rel.parts
+    parts = note_id.split("/")
     if not parts:
         raise ValueError("invalid note id")
     for part in parts:
         if part in {"", ".", ".."} or part.startswith(".") or any(ch not in SEGMENT_CHARS for ch in part):
             raise ValueError("invalid note id")
-    note_path = (vault / rel).with_suffix(".md").resolve()
+    note_path = (vault.joinpath(*parts[:-1]) / f"{parts[-1]}.md").resolve()
     try:
         note_path.relative_to(vault)
     except ValueError as exc:
